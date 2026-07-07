@@ -64,9 +64,9 @@ app.get(["/api/status", "/status"], async (req, res, next) => {
     }
 });
 
-// Offline status check monitor (Interval: 5s, Offline Threshold: 30s)
-const OFFLINE_THRESHOLD_MS = Number(process.env.OFFLINE_THRESHOLD_MS) || 30 * 1000;
-const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS) || 5 * 1000;
+// Offline status check monitor (Interval: 1s, Offline Threshold: 3s)
+const OFFLINE_THRESHOLD_MS = Number(process.env.OFFLINE_THRESHOLD_MS) || 3 * 1000;
+const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS) || 1 * 1000;
 
 let monitorTimeoutId = null;
 
