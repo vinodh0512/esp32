@@ -65,10 +65,12 @@ app.get(["/api/status", "/status"], async (req, res, next) => {
 });
 
 // Offline status check monitor (Interval: 5s, Offline Threshold: 30s)
-const OFFLINE_THRESHOLD_MS = 30 * 1000;
-const CHECK_INTERVAL_MS = 5 * 1000;
+const OFFLINE_THRESHOLD_MS = Number(process.env.OFFLINE_THRESHOLD_MS) || 30 * 1000;
+const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS) || 5 * 1000;
 
-setInterval(async () => {
+let monitorTimeoutId = null;
+
+async function checkDeviceStatus() {
     try {
         const cutoffTime = new Date(Date.now() - OFFLINE_THRESHOLD_MS);
         
@@ -83,12 +85,18 @@ setInterval(async () => {
         );
 
         if (result.modifiedCount > 0) {
-            console.log(`[Offline Monitor] Marked ${result.modifiedCount} device(s) as Offline (last seen > 30s ago)`);
+            console.log(`[Offline Monitor] Marked ${result.modifiedCount} device(s) as Offline (last seen > ${OFFLINE_THRESHOLD_MS / 1000}s ago)`);
         }
     } catch (error) {
         console.error("[Offline Monitor Error] Failed to run offline status check:", error);
+    } finally {
+        // Schedule next check only after the current one completes to prevent overlapping executions
+        monitorTimeoutId = setTimeout(checkDeviceStatus, CHECK_INTERVAL_MS);
     }
-}, CHECK_INTERVAL_MS);
+}
+
+// Start the check monitor
+checkDeviceStatus();
 
 // Global Error Handling Middleware
 app.use((err, req, res, next) => {
@@ -101,6 +109,39 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server Running on ${PORT}`);
 });
+
+// Graceful Shutdown Handler
+const gracefulShutdown = async (signal) => {
+    console.log(`[System] Received ${signal}. Shutting down gracefully...`);
+    
+    if (monitorTimeoutId) {
+        clearTimeout(monitorTimeoutId);
+        console.log("[Offline Monitor] Stopped status checking loop.");
+    }
+
+    server.close(async () => {
+        console.log("[Server] Express server closed.");
+        try {
+            const mongoose = require("mongoose");
+            await mongoose.disconnect();
+            console.log("[Database] Mongoose connection closed.");
+            process.exit(0);
+        } catch (err) {
+            console.error("[System Error] Error closing Mongoose connection:", err);
+            process.exit(1);
+        }
+    });
+
+    // Force close connections after 10 seconds if graceful shutdown hangs
+    setTimeout(() => {
+        console.error("[System] Forcefully shutting down...");
+        process.exit(1);
+    }, 10 * 1000).unref();
+};
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
