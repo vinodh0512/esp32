@@ -8,7 +8,16 @@ const deviceSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        default: "online"
+        enum: ["Online", "Offline"],
+        default: "Offline"
+    },
+
+    temperature: {
+        type: Number
+    },
+
+    humidity: {
+        type: Number
     },
 
     lastSeen: {
