@@ -10,9 +10,14 @@ const deviceSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["Online", "Offline"],
-        default: "Offline",
+        enum: ["online", "offline"],
+        default: "offline",
         index: true
+    },
+
+    led: {
+        type: Boolean,
+        default: false
     },
 
     temperature: {
@@ -30,9 +35,7 @@ const deviceSchema = new mongoose.Schema({
     }
 });
 
-// Compound index to optimize the query that finds online devices to mark offline:
-// { status: "Online", lastSeen: { $lt: cutoffTime } }
+// Compound index to optimize the query that finds online devices to mark offline
 deviceSchema.index({ status: 1, lastSeen: 1 });
 
 module.exports = mongoose.model("Device", deviceSchema);
-
