@@ -82,7 +82,7 @@ wss.on("connection", (ws, req) => {
           const dev = await Device.findOneAndUpdate(
             { deviceId: targetDeviceId },
             { led, lastSeen: new Date(), status: "online" },
-            { new: true, upsert: true }
+            { returnDocument: "after", upsert: true }
           );
 
           // Broadcast state to dashboards
@@ -111,7 +111,7 @@ wss.on("connection", (ws, req) => {
     Device.findOneAndUpdate(
       { deviceId: devId },
       { status: "online", lastSeen: new Date() },
-      { new: true, upsert: true }
+      { returnDocument: "after", upsert: true }
     )
       .then((dev) => {
         broadcastToDashboards({ type: "deviceUpdate", data: dev });
@@ -134,7 +134,7 @@ wss.on("connection", (ws, req) => {
               status: "online",
               lastSeen: new Date()
             },
-            { new: true, upsert: true }
+            { returnDocument: "after", upsert: true }
           );
 
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
@@ -152,7 +152,7 @@ wss.on("connection", (ws, req) => {
         const dev = await Device.findOneAndUpdate(
           { deviceId: devId },
           { status: "offline", lastSeen: new Date() },
-          { new: true }
+          { returnDocument: "after" }
         );
         if (dev) {
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
@@ -226,7 +226,7 @@ app.post("/status", async (req, res) => {
         status: status || "online",
         lastSeen: new Date()
       },
-      { new: true, upsert: true }
+      { returnDocument: "after", upsert: true }
     );
 
     console.log("[HTTP] Device status update:", dev);
@@ -270,7 +270,7 @@ app.post("/led/on", async (req, res) => {
     const dev = await Device.findOneAndUpdate(
       { deviceId: devId },
       { led: true, lastSeen: new Date(), status: "online" },
-      { new: true, upsert: true }
+      { returnDocument: "after", upsert: true }
     );
 
     console.log(`[HTTP] LED ON command for ${devId}`);
@@ -297,7 +297,7 @@ app.post("/led/off", async (req, res) => {
     const dev = await Device.findOneAndUpdate(
       { deviceId: devId },
       { led: false, lastSeen: new Date(), status: "online" },
-      { new: true, upsert: true }
+      { returnDocument: "after", upsert: true }
     );
 
     console.log(`[HTTP] LED OFF command for ${devId}`);
