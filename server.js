@@ -8,6 +8,7 @@ const url = require("url");
 // Import Database and Models
 const connectDB = require("./config/db");
 const Device = require("./models/Device");
+const TemperatureLog = require("./models/TemperatureLog");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -61,8 +62,8 @@ wss.on("connection", (ws, req) => {
     Device.findOne({ deviceId: devId })
       .then((dev) => {
         const payload = dev
-          ? { deviceId: dev.deviceId, status: dev.status, led: dev.led, temperature: dev.temperature, humidity: dev.humidity, lastSeen: dev.lastSeen }
-          : { deviceId: devId, status: "offline", led: false, lastSeen: null };
+          ? { deviceId: dev.deviceId, status: dev.status, led: dev.led, tempEnabled: dev.tempEnabled, temperature: dev.temperature, humidity: dev.humidity, lastSeen: dev.lastSeen }
+          : { deviceId: devId, status: "offline", led: false, tempEnabled: false, lastSeen: null };
         ws.send(JSON.stringify({ type: "deviceUpdate", data: payload }));
       })
       .catch((err) => console.error("[WS] Error sending initial status to dashboard:", err));
@@ -75,13 +76,17 @@ wss.on("connection", (ws, req) => {
         if (parsedMessage.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: parsedMessage.timestamp }));
         } else if (parsedMessage.type === "control") {
-          const { led } = parsedMessage;
+          const { led, tempEnabled } = parsedMessage;
           const targetDeviceId = parsedMessage.deviceId || devId;
+
+          const updateObj = { lastSeen: new Date(), status: "online" };
+          if (led !== undefined) updateObj.led = led;
+          if (tempEnabled !== undefined) updateObj.tempEnabled = tempEnabled;
 
           // Save new state in database
           const dev = await Device.findOneAndUpdate(
             { deviceId: targetDeviceId },
-            { led, lastSeen: new Date(), status: "online" },
+            updateObj,
             { returnDocument: "after", upsert: true }
           );
 
@@ -91,7 +96,10 @@ wss.on("connection", (ws, req) => {
           // Forward to target device socket instantly
           const deviceWs = deviceClients.get(targetDeviceId);
           if (deviceWs && deviceWs.readyState === 1) {
-            deviceWs.send(JSON.stringify({ type: "control", led }));
+            const forwardPayload = { type: "control" };
+            if (led !== undefined) forwardPayload.led = led;
+            if (tempEnabled !== undefined) forwardPayload.tempEnabled = tempEnabled;
+            deviceWs.send(JSON.stringify(forwardPayload));
           }
         }
       } catch (err) {
@@ -137,7 +145,30 @@ wss.on("connection", (ws, req) => {
             { returnDocument: "after", upsert: true }
           );
 
+          if (metrics.temperature !== undefined && metrics.temperature !== null) {
+            await TemperatureLog.create({
+              deviceId: devId,
+              temperature: metrics.temperature
+            });
+          }
+
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
+        } else if (parsedMessage.type === "temperature") {
+          const { temperature } = parsedMessage.data || {};
+          if (temperature !== undefined && temperature !== null) {
+            const dev = await Device.findOneAndUpdate(
+              { deviceId: devId },
+              { temperature, status: "online", lastSeen: new Date() },
+              { returnDocument: "after", upsert: true }
+            );
+
+            await TemperatureLog.create({
+              deviceId: devId,
+              temperature
+            });
+
+            broadcastToDashboards({ type: "deviceUpdate", data: dev });
+          }
         }
       } catch (err) {
         console.error("[WS] Error parsing device message:", err);
@@ -324,6 +355,77 @@ app.get("/led", async (req, res) => {
     res.json({ led: dev ? dev.led : false });
   } catch (err) {
     console.error("[HTTP] Error getting LED state:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Temperature Sensor ON (HTTP)
+app.post("/temp/on", async (req, res) => {
+  try {
+    const devId = req.body.deviceId || "esp32-1";
+
+    const dev = await Device.findOneAndUpdate(
+      { deviceId: devId },
+      { tempEnabled: true, lastSeen: new Date(), status: "online" },
+      { returnDocument: "after", upsert: true }
+    );
+
+    console.log(`[HTTP] Temp Sensor ON command for ${devId}`);
+    broadcastToDashboards({ type: "deviceUpdate", data: dev });
+
+    // Send WebSocket command if online
+    const deviceWs = deviceClients.get(devId);
+    if (deviceWs && deviceWs.readyState === 1) {
+      deviceWs.send(JSON.stringify({ type: "control", tempEnabled: true }));
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[HTTP] Error handling Temp ON:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Temperature Sensor OFF (HTTP)
+app.post("/temp/off", async (req, res) => {
+  try {
+    const devId = req.body.deviceId || "esp32-1";
+
+    const dev = await Device.findOneAndUpdate(
+      { deviceId: devId },
+      { tempEnabled: false, lastSeen: new Date(), status: "online" },
+      { returnDocument: "after", upsert: true }
+    );
+
+    console.log(`[HTTP] Temp Sensor OFF command for ${devId}`);
+    broadcastToDashboards({ type: "deviceUpdate", data: dev });
+
+    // Send WebSocket command if online
+    const deviceWs = deviceClients.get(devId);
+    if (deviceWs && deviceWs.readyState === 1) {
+      deviceWs.send(JSON.stringify({ type: "control", tempEnabled: false }));
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[HTTP] Error handling Temp OFF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET recent temperature log history (HTTP API)
+app.get("/temp/history", async (req, res) => {
+  try {
+    const devId = req.query.deviceId || "esp32-1";
+    const limit = parseInt(req.query.limit) || 20;
+
+    const logs = await TemperatureLog.find({ deviceId: devId })
+      .sort({ timestamp: -1 })
+      .limit(limit);
+
+    res.json(logs.reverse());
+  } catch (err) {
+    console.error("[HTTP] Error fetching temp history:", err);
     res.status(500).json({ error: err.message });
   }
 });

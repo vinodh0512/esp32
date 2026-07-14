@@ -20,6 +20,11 @@ const deviceSchema = new mongoose.Schema({
         default: false
     },
 
+    tempEnabled: {
+        type: Boolean,
+        default: false
+    },
+
     temperature: {
         type: Number
     },
