@@ -59,9 +59,9 @@ async function saveTemperatureLogIfNeeded(devId, temperature) {
       if (tempDiff >= 0.2) {
         shouldSave = true;
         console.log(`[Database] Temperature changed by ${tempDiff.toFixed(2)}°C (>= 0.2°C), saving: ${temperature}°C`);
-      } else if (timeDiff >= 10000) {
+      } else if (timeDiff >= 10000 && temperature !== lastLog.temperature) {
         shouldSave = true;
-        console.log(`[Database] 10 seconds elapsed since last save (${(timeDiff/1000).toFixed(1)}s), saving: ${temperature}°C`);
+        console.log(`[Database] 10 seconds elapsed and temperature changed to ${temperature}°C, saving.`);
       }
     }
     
