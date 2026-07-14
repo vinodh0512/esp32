@@ -417,13 +417,28 @@ app.post("/temp/off", async (req, res) => {
 app.get("/temp/history", async (req, res) => {
   try {
     const devId = req.query.deviceId || "esp32-1";
-    const limit = parseInt(req.query.limit) || 20;
+    const query = { deviceId: devId };
 
-    const logs = await TemperatureLog.find({ deviceId: devId })
-      .sort({ timestamp: -1 })
-      .limit(limit);
+    if (req.query.hours) {
+      const hours = parseFloat(req.query.hours);
+      query.timestamp = { $gte: new Date(Date.now() - hours * 60 * 60 * 1000) };
+    } else if (req.query.minutes) {
+      const minutes = parseFloat(req.query.minutes);
+      query.timestamp = { $gte: new Date(Date.now() - minutes * 60 * 1000) };
+    }
 
-    res.json(logs.reverse());
+    let logs;
+    if (req.query.hours || req.query.minutes) {
+      logs = await TemperatureLog.find(query).sort({ timestamp: 1 });
+    } else {
+      const limit = parseInt(req.query.limit) || 20;
+      logs = await TemperatureLog.find(query)
+        .sort({ timestamp: -1 })
+        .limit(limit);
+      logs = logs.reverse();
+    }
+
+    res.json(logs);
   } catch (err) {
     console.error("[HTTP] Error fetching temp history:", err);
     res.status(500).json({ error: err.message });
