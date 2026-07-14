@@ -41,6 +41,41 @@ function broadcastToDashboards(messageObj) {
   }
 }
 
+// Helper to conditionally save temperature log to MongoDB
+async function saveTemperatureLogIfNeeded(devId, temperature) {
+  if (temperature === undefined || temperature === null) return;
+  
+  try {
+    const lastLog = await TemperatureLog.findOne({ deviceId: devId }).sort({ timestamp: -1 });
+    
+    let shouldSave = false;
+    if (!lastLog) {
+      shouldSave = true;
+      console.log(`[Database] Initial temperature log for device ${devId}, saving: ${temperature}°C`);
+    } else {
+      const tempDiff = Math.abs(temperature - lastLog.temperature);
+      const timeDiff = Date.now() - new Date(lastLog.timestamp).getTime();
+      
+      if (tempDiff >= 0.2) {
+        shouldSave = true;
+        console.log(`[Database] Temperature changed by ${tempDiff.toFixed(2)}°C (>= 0.2°C), saving: ${temperature}°C`);
+      } else if (timeDiff >= 10000) {
+        shouldSave = true;
+        console.log(`[Database] 10 seconds elapsed since last save (${(timeDiff/1000).toFixed(1)}s), saving: ${temperature}°C`);
+      }
+    }
+    
+    if (shouldSave) {
+      await TemperatureLog.create({
+        deviceId: devId,
+        temperature
+      });
+    }
+  } catch (err) {
+    console.error("[Database] Error saving temperature log:", err);
+  }
+}
+
 // WebSocket Event Handlers
 wss.on("connection", (ws, req) => {
   const parsedUrl = url.parse(req.url, true);
@@ -146,10 +181,7 @@ wss.on("connection", (ws, req) => {
           );
 
           if (metrics.temperature !== undefined && metrics.temperature !== null) {
-            await TemperatureLog.create({
-              deviceId: devId,
-              temperature: metrics.temperature
-            });
+            await saveTemperatureLogIfNeeded(devId, metrics.temperature);
           }
 
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
@@ -162,10 +194,7 @@ wss.on("connection", (ws, req) => {
               { returnDocument: "after", upsert: true }
             );
 
-            await TemperatureLog.create({
-              deviceId: devId,
-              temperature
-            });
+            await saveTemperatureLogIfNeeded(devId, temperature);
 
             broadcastToDashboards({ type: "deviceUpdate", data: dev });
           }
