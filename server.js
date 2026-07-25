@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.raw({ type: ["image/jpeg", "application/octet-stream"], limit: "10mb" }));
 
 // Initialize Database connection
 connectDB().catch((err) => {
@@ -251,11 +252,66 @@ setInterval(async () => {
   }
 }, 5000);
 
-// --- REST API ENDPOINTS ---
+// --- CAMERA RELAY ENDPOINTS ---
+let latestCameraFrame = null;
+let latestCameraTimestamp = null;
+let cameraFlashLed = false;
+
+// HTTP POST endpoint for ESP32-CAM frame upload
+app.post("/upload", (req, res) => {
+  if (!req.body || (Buffer.isBuffer(req.body) && req.body.length === 0)) {
+    return res.status(400).json({ error: "Empty image payload" });
+  }
+
+  latestCameraFrame = req.body;
+  latestCameraTimestamp = Date.now();
+
+  // Broadcast to WebSockets
+  if (Buffer.isBuffer(req.body)) {
+    const base64Frame = req.body.toString("base64");
+    broadcastToDashboards({
+      type: "cameraFrame",
+      timestamp: latestCameraTimestamp,
+      frame: `data:image/jpeg;base64,${base64Frame}`
+    });
+  }
+
+  // Return flash state so ESP32-CAM turns onboard flash LED ON/OFF
+  res.status(200).json({ success: true, timestamp: latestCameraTimestamp, flash: cameraFlashLed });
+});
+
+// Toggle or set Camera Flash LED state from frontend
+app.post("/api/camera/flash", (req, res) => {
+  const { flash } = req.body;
+  if (flash !== undefined) {
+    cameraFlashLed = Boolean(flash);
+  } else {
+    cameraFlashLed = !cameraFlashLed;
+  }
+  
+  broadcastToDashboards({ type: "cameraFlashUpdate", flash: cameraFlashLed });
+  res.json({ success: true, flash: cameraFlashLed });
+});
+
+// Get current Camera Flash LED state
+app.get("/api/camera/flash", (req, res) => {
+  res.json({ flash: cameraFlashLed });
+});
+
+// Endpoint for React Frontend to fetch the latest camera frame
+app.get("/api/camera/latest", (req, res) => {
+  if (!latestCameraFrame) {
+    return res.status(404).send("No camera frame available yet");
+  }
+
+  res.set("Content-Type", "image/jpeg");
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.send(latestCameraFrame);
+});
 
 // Home route
 app.get("/", (req, res) => {
-  res.json({ message: "ESP32 Backend Server with Fermentation Analytics & WebSockets Active" });
+  res.json({ message: "ESP32 Backend Server with Camera Relay & WebSockets Active" });
 });
 
 // Get Fermentation Batches History
