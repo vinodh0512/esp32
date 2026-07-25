@@ -256,6 +256,7 @@ setInterval(async () => {
 let latestCameraFrame = null;
 let latestCameraTimestamp = null;
 let cameraFlashLed = false;
+const cameraStreamClients = new Set();
 
 // HTTP POST endpoint for ESP32-CAM frame upload
 app.post("/upload", (req, res) => {
@@ -266,18 +267,54 @@ app.post("/upload", (req, res) => {
   latestCameraFrame = req.body;
   latestCameraTimestamp = Date.now();
 
-  // Broadcast to WebSockets
   if (Buffer.isBuffer(req.body)) {
+    // 1. Broadcast to WebSockets
     const base64Frame = req.body.toString("base64");
     broadcastToDashboards({
       type: "cameraFrame",
       timestamp: latestCameraTimestamp,
       frame: `data:image/jpeg;base64,${base64Frame}`
     });
+
+    // 2. Broadcast to MJPEG HTTP Stream subscribers
+    const header = `--myboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${req.body.length}\r\n\r\n`;
+    for (const clientRes of cameraStreamClients) {
+      try {
+        clientRes.write(header);
+        clientRes.write(req.body);
+        clientRes.write("\r\n");
+      } catch (err) {
+        cameraStreamClients.delete(clientRes);
+      }
+    }
   }
 
   // Return flash state so ESP32-CAM turns onboard flash LED ON/OFF
   res.status(200).json({ success: true, timestamp: latestCameraTimestamp, flash: cameraFlashLed });
+});
+
+// Real-time MJPEG Stream endpoint for Web Browsers & React frontend
+app.get("/api/camera/stream", (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=--myboundary',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Connection': 'keep-alive',
+    'Pragma': 'no-cache'
+  });
+
+  // Write initial frame if available
+  if (latestCameraFrame && Buffer.isBuffer(latestCameraFrame)) {
+    const header = `--myboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${latestCameraFrame.length}\r\n\r\n`;
+    res.write(header);
+    res.write(latestCameraFrame);
+    res.write("\r\n");
+  }
+
+  cameraStreamClients.add(res);
+
+  req.on("close", () => {
+    cameraStreamClients.delete(res);
+  });
 });
 
 // Toggle or set Camera Flash LED state from frontend
