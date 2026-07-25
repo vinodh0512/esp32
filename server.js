@@ -9,6 +9,7 @@ const url = require("url");
 const connectDB = require("./config/db");
 const Device = require("./models/Device");
 const TemperatureLog = require("./models/TemperatureLog");
+const FermentationBatch = require("./models/FermentationBatch");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -41,9 +42,9 @@ function broadcastToDashboards(messageObj) {
   }
 }
 
-// Helper to conditionally save temperature log to MongoDB
-async function saveTemperatureLogIfNeeded(devId, temperature) {
-  if (temperature === undefined || temperature === null) return;
+// Helper to conditionally save temperature & pH log to MongoDB
+async function saveTemperatureLogIfNeeded(devId, temperature, pH) {
+  if (temperature === undefined && pH === undefined) return;
   
   try {
     const lastLog = await TemperatureLog.findOne({ deviceId: devId }).sort({ timestamp: -1 });
@@ -51,28 +52,41 @@ async function saveTemperatureLogIfNeeded(devId, temperature) {
     let shouldSave = false;
     if (!lastLog) {
       shouldSave = true;
-      console.log(`[Database] Initial temperature log for device ${devId}, saving: ${temperature}°C`);
     } else {
-      const tempDiff = Math.abs(temperature - lastLog.temperature);
+      const tempDiff = temperature !== undefined ? Math.abs(temperature - lastLog.temperature) : 0;
       const timeDiff = Date.now() - new Date(lastLog.timestamp).getTime();
       
-      if (tempDiff >= 0.2) {
+      if (tempDiff >= 0.2 || timeDiff >= 10000) {
         shouldSave = true;
-        console.log(`[Database] Temperature changed by ${tempDiff.toFixed(2)}°C (>= 0.2°C), saving: ${temperature}°C`);
-      } else if (timeDiff >= 10000 && temperature !== lastLog.temperature) {
-        shouldSave = true;
-        console.log(`[Database] 10 seconds elapsed and temperature changed to ${temperature}°C, saving.`);
       }
     }
     
     if (shouldSave) {
       await TemperatureLog.create({
         deviceId: devId,
-        temperature
+        temperature,
+        pH
       });
     }
+
+    // Append to active fermentation batch data points if running
+    const activeBatch = await FermentationBatch.findOne({ deviceId: devId, status: "RUNNING" });
+    if (activeBatch) {
+      activeBatch.dataPoints.push({
+        time: new Date(),
+        pH: pH !== undefined ? pH : activeBatch.initialPH,
+        temperature: temperature !== undefined ? temperature : activeBatch.initialTemp
+      });
+
+      if (temperature && (!activeBatch.maxTemp || temperature > activeBatch.maxTemp)) {
+        activeBatch.maxTemp = temperature;
+      }
+
+      await activeBatch.save();
+      broadcastToDashboards({ type: "fermentationUpdate", data: activeBatch });
+    }
   } catch (err) {
-    console.error("[Database] Error saving temperature log:", err);
+    console.error("[Database] Error saving telemetry log:", err);
   }
 }
 
@@ -82,7 +96,6 @@ wss.on("connection", (ws, req) => {
   const { clientType, deviceId } = parsedUrl.query;
   const devId = deviceId || "esp32-1";
 
-  // Production-grade Connection Keep-Alive Setup
   ws.isAlive = true;
   ws.on("pong", () => {
     ws.isAlive = true;
@@ -93,13 +106,17 @@ wss.on("connection", (ws, req) => {
   if (clientType === "dashboard") {
     dashboardClients.add(ws);
 
-    // Fetch initial device state from database to send immediately
-    Device.findOne({ deviceId: devId })
-      .then((dev) => {
+    // Fetch initial device state & active batch to send to dashboard
+    Promise.all([
+      Device.findOne({ deviceId: devId }),
+      FermentationBatch.findOne({ deviceId: devId, status: "RUNNING" })
+    ])
+      .then(([dev, activeBatch]) => {
         const payload = dev
-          ? { deviceId: dev.deviceId, status: dev.status, led: dev.led, tempEnabled: dev.tempEnabled, temperature: dev.temperature, humidity: dev.humidity, lastSeen: dev.lastSeen }
-          : { deviceId: devId, status: "offline", led: false, tempEnabled: false, lastSeen: null };
-        ws.send(JSON.stringify({ type: "deviceUpdate", data: payload }));
+          ? { deviceId: dev.deviceId, status: dev.status, led: dev.led, tempEnabled: dev.tempEnabled, temperature: dev.temperature, pH: dev.pH, voltage: dev.voltage, raw: dev.raw, phConnected: dev.phConnected, tempConnected: dev.tempConnected, lastSeen: dev.lastSeen }
+          : { deviceId: devId, status: "offline", led: false, tempEnabled: true, lastSeen: null };
+        
+        ws.send(JSON.stringify({ type: "deviceUpdate", data: payload, activeBatch }));
       })
       .catch((err) => console.error("[WS] Error sending initial status to dashboard:", err));
 
@@ -111,29 +128,27 @@ wss.on("connection", (ws, req) => {
         if (parsedMessage.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: parsedMessage.timestamp }));
         } else if (parsedMessage.type === "control") {
-          const { led, tempEnabled } = parsedMessage;
+          const { led, tempEnabled, calibrationOffset } = parsedMessage;
           const targetDeviceId = parsedMessage.deviceId || devId;
 
           const updateObj = { lastSeen: new Date(), status: "online" };
           if (led !== undefined) updateObj.led = led;
           if (tempEnabled !== undefined) updateObj.tempEnabled = tempEnabled;
 
-          // Save new state in database
           const dev = await Device.findOneAndUpdate(
             { deviceId: targetDeviceId },
             updateObj,
             { returnDocument: "after", upsert: true }
           );
 
-          // Broadcast state to dashboards
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
 
-          // Forward to target device socket instantly
           const deviceWs = deviceClients.get(targetDeviceId);
           if (deviceWs && deviceWs.readyState === 1) {
             const forwardPayload = { type: "control" };
             if (led !== undefined) forwardPayload.led = led;
             if (tempEnabled !== undefined) forwardPayload.tempEnabled = tempEnabled;
+            if (calibrationOffset !== undefined) forwardPayload.calibrationOffset = calibrationOffset;
             deviceWs.send(JSON.stringify(forwardPayload));
           }
         }
@@ -150,7 +165,6 @@ wss.on("connection", (ws, req) => {
   } else if (clientType === "device") {
     deviceClients.set(devId, ws);
 
-    // Update status to online in MongoDB
     Device.findOneAndUpdate(
       { deviceId: devId },
       { status: "online", lastSeen: new Date() },
@@ -164,40 +178,32 @@ wss.on("connection", (ws, req) => {
     ws.on("message", async (message) => {
       try {
         const parsedMessage = JSON.parse(message);
-        console.log("[WS] Device Msg:", parsedMessage);
+        console.log("[WS] Device Telemetry Msg:", parsedMessage);
 
-        if (parsedMessage.type === "status" || parsedMessage.type === "heartbeat") {
-          const metrics = parsedMessage.data || {};
+        if (parsedMessage.type === "telemetry" || parsedMessage.type === "status" || parsedMessage.type === "heartbeat") {
+          const metrics = parsedMessage.data || parsedMessage;
+          const { temperature, pH, voltage, raw, phConnected, tempConnected, led } = metrics;
           
-          // Save status, latency, or sensor metrics to MongoDB
+          const updateData = {
+            status: "online",
+            lastSeen: new Date()
+          };
+          if (temperature !== undefined) updateData.temperature = temperature;
+          if (pH !== undefined) updateData.pH = pH;
+          if (voltage !== undefined) updateData.voltage = voltage;
+          if (raw !== undefined) updateData.raw = raw;
+          if (phConnected !== undefined) updateData.phConnected = phConnected;
+          if (tempConnected !== undefined) updateData.tempConnected = tempConnected;
+          if (led !== undefined) updateData.led = led;
+
           const dev = await Device.findOneAndUpdate(
             { deviceId: devId },
-            {
-              ...metrics,
-              status: "online",
-              lastSeen: new Date()
-            },
+            updateData,
             { returnDocument: "after", upsert: true }
           );
 
-          if (metrics.temperature !== undefined && metrics.temperature !== null) {
-            await saveTemperatureLogIfNeeded(devId, metrics.temperature);
-          }
-
+          await saveTemperatureLogIfNeeded(devId, temperature, pH);
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
-        } else if (parsedMessage.type === "temperature") {
-          const { temperature } = parsedMessage.data || {};
-          if (temperature !== undefined && temperature !== null) {
-            const dev = await Device.findOneAndUpdate(
-              { deviceId: devId },
-              { temperature, status: "online", lastSeen: new Date() },
-              { returnDocument: "after", upsert: true }
-            );
-
-            await saveTemperatureLogIfNeeded(devId, temperature);
-
-            broadcastToDashboards({ type: "deviceUpdate", data: dev });
-          }
         }
       } catch (err) {
         console.error("[WS] Error parsing device message:", err);
@@ -218,32 +224,15 @@ wss.on("connection", (ws, req) => {
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
         }
       } catch (err) {
-        console.error("[WS] Error setting device offline in DB on close:", err);
+        console.error("[WS] Error setting device offline on close:", err);
       }
     });
   } else {
-    // Unrecognized client, reject connection
     ws.close();
   }
 });
 
-// Production-grade connection monitoring (Ping check interval)
-const keepAliveInterval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) {
-      console.log("[WS] Terminating stale connection due to missed pong");
-      return ws.terminate();
-    }
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
-wss.on("close", () => {
-  clearInterval(keepAliveInterval);
-});
-
-// Periodic offline sweep: Scan DB every 5 seconds for devices inactive for > 15s
+// Periodic offline sweep
 setInterval(async () => {
   try {
     const cutoffTime = new Date(Date.now() - 15000);
@@ -255,7 +244,6 @@ setInterval(async () => {
     for (const dev of staleDevices) {
       dev.status = "offline";
       await dev.save();
-      console.log(`[Sweep] Device ${dev.deviceId} flagged offline due to inactivity.`);
       broadcastToDashboards({ type: "deviceUpdate", data: dev });
     }
   } catch (err) {
@@ -263,218 +251,77 @@ setInterval(async () => {
   }
 }, 5000);
 
-
-// --- HTTP REST API Endpoints ---
+// --- REST API ENDPOINTS ---
 
 // Home route
 app.get("/", (req, res) => {
-  res.json({
-    message: "ESP32 Backend Running with WebSockets & MongoDB Support"
-  });
+  res.json({ message: "ESP32 Backend Server with Fermentation Analytics & WebSockets Active" });
 });
 
-// ESP32 Heartbeat / Status Post (HTTP Fallback)
-app.post("/status", async (req, res) => {
+// Get Fermentation Batches History
+app.get("/api/batches", async (req, res) => {
   try {
-    const { deviceId, status } = req.body;
+    const batches = await FermentationBatch.find().sort({ startTime: -1 });
+    res.json({ success: true, batches });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start New Fermentation Batch
+app.post("/api/batches/start", async (req, res) => {
+  try {
+    const { name, deviceId, initialPH, initialTemp } = req.body;
     const devId = deviceId || "esp32-1";
 
-    const dev = await Device.findOneAndUpdate(
-      { deviceId: devId },
-      {
-        ...req.body,
-        status: status || "online",
-        lastSeen: new Date()
-      },
-      { returnDocument: "after", upsert: true }
-    );
+    // Mark previous running batch as COMPLETED
+    await FermentationBatch.updateMany({ deviceId: devId, status: "RUNNING" }, { status: "COMPLETED", endTime: new Date() });
 
-    console.log("[HTTP] Device status update:", dev);
-    broadcastToDashboards({ type: "deviceUpdate", data: dev });
+    const batch = await FermentationBatch.create({
+      name: name || "Yeast Sugar Test",
+      deviceId: devId,
+      startTime: new Date(),
+      initialPH: initialPH !== undefined ? initialPH : 6.82,
+      initialTemp: initialTemp !== undefined ? initialTemp : 28.4,
+      status: "RUNNING",
+      dataPoints: [{
+        time: new Date(),
+        pH: initialPH !== undefined ? initialPH : 6.82,
+        temperature: initialTemp !== undefined ? initialTemp : 28.4
+      }]
+    });
 
-    res.json({ success: true });
+    broadcastToDashboards({ type: "fermentationStart", batch });
+    res.json({ success: true, batch });
   } catch (err) {
-    console.error("[HTTP] Error updating status:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET status (HTTP Polling fallback for React Dashboard)
-app.get("/status", async (req, res) => {
+// End Fermentation Batch
+app.post("/api/batches/stop", async (req, res) => {
   try {
-    const devId = req.query.deviceId || "esp32-1";
-    let dev = await Device.findOne({ deviceId: devId });
+    const { deviceId, finalPH } = req.body;
+    const devId = deviceId || "esp32-1";
 
-    if (dev) {
-      // Check offline timeout locally before returning
-      if (dev.lastSeen && Date.now() - dev.lastSeen.getTime() > 15000 && dev.status !== "offline") {
-        dev.status = "offline";
-        await dev.save();
-        broadcastToDashboards({ type: "deviceUpdate", data: dev });
-      }
-      res.json(dev);
-    } else {
-      res.status(404).json({ error: "Device not found" });
-    }
-  } catch (err) {
-    console.error("[HTTP] Error fetching status:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// LED ON (HTTP)
-app.post("/led/on", async (req, res) => {
-  try {
-    const devId = req.body.deviceId || "esp32-1";
-
-    const dev = await Device.findOneAndUpdate(
-      { deviceId: devId },
-      { led: true, lastSeen: new Date(), status: "online" },
-      { returnDocument: "after", upsert: true }
-    );
-
-    console.log(`[HTTP] LED ON command for ${devId}`);
-    broadcastToDashboards({ type: "deviceUpdate", data: dev });
-
-    // Send WebSocket command if online
-    const deviceWs = deviceClients.get(devId);
-    if (deviceWs && deviceWs.readyState === 1) {
-      deviceWs.send(JSON.stringify({ type: "control", led: true }));
+    const batch = await FermentationBatch.findOne({ deviceId: devId, status: "RUNNING" });
+    if (!batch) {
+      return res.status(404).json({ error: "No active fermentation batch found" });
     }
 
-    res.json({ success: true });
+    batch.status = "COMPLETED";
+    batch.endTime = new Date();
+    if (finalPH !== undefined) batch.finalPH = finalPH;
+
+    await batch.save();
+    broadcastToDashboards({ type: "fermentationStop", batch });
+    res.json({ success: true, batch });
   } catch (err) {
-    console.error("[HTTP] Error handling LED ON:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// LED OFF (HTTP)
-app.post("/led/off", async (req, res) => {
-  try {
-    const devId = req.body.deviceId || "esp32-1";
-
-    const dev = await Device.findOneAndUpdate(
-      { deviceId: devId },
-      { led: false, lastSeen: new Date(), status: "online" },
-      { returnDocument: "after", upsert: true }
-    );
-
-    console.log(`[HTTP] LED OFF command for ${devId}`);
-    broadcastToDashboards({ type: "deviceUpdate", data: dev });
-
-    // Send WebSocket command if online
-    const deviceWs = deviceClients.get(devId);
-    if (deviceWs && deviceWs.readyState === 1) {
-      deviceWs.send(JSON.stringify({ type: "control", led: false }));
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[HTTP] Error handling LED OFF:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ESP32 checks LED state (HTTP poll fallback)
-app.get("/led", async (req, res) => {
-  try {
-    const devId = req.query.deviceId || "esp32-1";
-    const dev = await Device.findOne({ deviceId: devId });
-    res.json({ led: dev ? dev.led : false });
-  } catch (err) {
-    console.error("[HTTP] Error getting LED state:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Temperature Sensor ON (HTTP)
-app.post("/temp/on", async (req, res) => {
-  try {
-    const devId = req.body.deviceId || "esp32-1";
-
-    const dev = await Device.findOneAndUpdate(
-      { deviceId: devId },
-      { tempEnabled: true, lastSeen: new Date(), status: "online" },
-      { returnDocument: "after", upsert: true }
-    );
-
-    console.log(`[HTTP] Temp Sensor ON command for ${devId}`);
-    broadcastToDashboards({ type: "deviceUpdate", data: dev });
-
-    // Send WebSocket command if online
-    const deviceWs = deviceClients.get(devId);
-    if (deviceWs && deviceWs.readyState === 1) {
-      deviceWs.send(JSON.stringify({ type: "control", tempEnabled: true }));
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[HTTP] Error handling Temp ON:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Temperature Sensor OFF (HTTP)
-app.post("/temp/off", async (req, res) => {
-  try {
-    const devId = req.body.deviceId || "esp32-1";
-
-    const dev = await Device.findOneAndUpdate(
-      { deviceId: devId },
-      { tempEnabled: false, lastSeen: new Date(), status: "online" },
-      { returnDocument: "after", upsert: true }
-    );
-
-    console.log(`[HTTP] Temp Sensor OFF command for ${devId}`);
-    broadcastToDashboards({ type: "deviceUpdate", data: dev });
-
-    // Send WebSocket command if online
-    const deviceWs = deviceClients.get(devId);
-    if (deviceWs && deviceWs.readyState === 1) {
-      deviceWs.send(JSON.stringify({ type: "control", tempEnabled: false }));
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[HTTP] Error handling Temp OFF:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET recent temperature log history (HTTP API)
-app.get("/temp/history", async (req, res) => {
-  try {
-    const devId = req.query.deviceId || "esp32-1";
-    const query = { deviceId: devId };
-
-    if (req.query.hours) {
-      const hours = parseFloat(req.query.hours);
-      query.timestamp = { $gte: new Date(Date.now() - hours * 60 * 60 * 1000) };
-    } else if (req.query.minutes) {
-      const minutes = parseFloat(req.query.minutes);
-      query.timestamp = { $gte: new Date(Date.now() - minutes * 60 * 1000) };
-    }
-
-    let logs;
-    if (req.query.hours || req.query.minutes) {
-      logs = await TemperatureLog.find(query).sort({ timestamp: 1 });
-    } else {
-      const limit = parseInt(req.query.limit) || 20;
-      logs = await TemperatureLog.find(query)
-        .sort({ timestamp: -1 })
-        .limit(limit);
-      logs = logs.reverse();
-    }
-
-    res.json(logs);
-  } catch (err) {
-    console.error("[HTTP] Error fetching temp history:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Listen on server
+// Start Server
 server.listen(PORT, () => {
-  console.log("Server Running On Port", PORT);
+  console.log(`[Backend] Server listening on http://localhost:${PORT}`);
 });

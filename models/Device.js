@@ -22,15 +22,33 @@ const deviceSchema = new mongoose.Schema({
 
     tempEnabled: {
         type: Boolean,
-        default: false
+        default: true
     },
 
     temperature: {
         type: Number
     },
 
-    humidity: {
+    pH: {
         type: Number
+    },
+
+    voltage: {
+        type: Number
+    },
+
+    raw: {
+        type: Number
+    },
+
+    tempConnected: {
+        type: Boolean,
+        default: false
+    },
+
+    phConnected: {
+        type: Boolean,
+        default: false
     },
 
     lastSeen: {
@@ -40,7 +58,6 @@ const deviceSchema = new mongoose.Schema({
     }
 });
 
-// Compound index to optimize the query that finds online devices to mark offline
 deviceSchema.index({ status: 1, lastSeen: 1 });
 
 module.exports = mongoose.model("Device", deviceSchema);
