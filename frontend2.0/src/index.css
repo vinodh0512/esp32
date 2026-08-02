@@ -1,0 +1,260 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700;800;900&family=Plus+Jakarta+Sans:wght@700;800;900&display=swap');
+
+body {
+  background-color: #f4f4f0;
+  color: #000000;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background-image: radial-gradient(#000000 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* --- NEO-BRUTALISM DESIGN UTILITIES --- */
+
+/* Brutalist Base Card */
+.brutal-card {
+  background: #ffffff;
+  border: 4px solid #000000;
+  box-shadow: 6px 6px 0 #000000;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  overflow: hidden;
+}
+
+.brutal-card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 8px 8px 0 #000000;
+}
+
+/* Brutalist Buttons */
+.brutal-btn {
+  background: #ffffff;
+  color: #000000;
+  border: 3px solid #000000;
+  box-shadow: 4px 4px 0 #000000;
+  font-weight: 900;
+  text-transform: uppercase;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.brutal-btn:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 #000000;
+  background: #facc15;
+}
+
+.brutal-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 #000000;
+}
+
+/* Primary Action Button (Green Slide Effect) */
+.brutal-sure-btn {
+  position: relative;
+  background: #000000;
+  color: #ffffff;
+  border: 3.5px solid #000000;
+  box-shadow: 5px 5px 0 #000000;
+  font-weight: 900;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  padding: 10px 22px;
+  cursor: pointer;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  z-index: 1;
+}
+
+.brutal-sure-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #5ad641;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: -1;
+}
+
+.brutal-sure-btn:hover {
+  color: #000000;
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0 #000000;
+}
+
+.brutal-sure-btn:hover::before {
+  transform: translateX(0);
+}
+
+.brutal-btn-danger {
+  background: #ff4757;
+  color: #ffffff;
+}
+
+.brutal-btn-danger:hover {
+  background: #ff6b81;
+  color: #000000;
+}
+
+/* Brutalist Input Fields */
+.brutal-input {
+  background: #ffffff;
+  border: 3px solid #000000;
+  padding: 10px 14px;
+  font-size: 1rem;
+  font-weight: 800;
+  color: #000000;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.brutal-input:focus {
+  box-shadow: 4px 4px 0 #000000;
+  background: #fffee0;
+}
+
+/* Brutalist Badges & Callouts */
+.brutal-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 2.5px solid #000000;
+  font-weight: 900;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  box-shadow: 2px 2px 0 #000000;
+}
+
+.brutal-title {
+  font-size: 1.4rem;
+  font-weight: 900;
+  color: #000000;
+  text-transform: uppercase;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+/* Font Monospace Utility */
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Animated Glitch Effect */
+@keyframes glitch {
+  0% { transform: translate(0) }
+  20% { transform: translate(-2px, 2px) }
+  40% { transform: translate(-2px, -2px) }
+  60% { transform: translate(2px, 2px) }
+  80% { transform: translate(2px, -2px) }
+  100% { transform: translate(0) }
+}
+
+.glitch-hover:hover {
+  animation: glitch 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+/* --- MOBILE RESPONSIVE MEDIA QUERIES --- */
+
+@media (max-width: 1024px) {
+  .brutal-title {
+    font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    background-size: 16px 16px;
+  }
+
+  .brutal-card {
+    border-width: 3px;
+    box-shadow: 4px 4px 0 #000000;
+    padding: 16px !important;
+  }
+
+  .brutal-card:hover {
+    transform: none;
+    box-shadow: 4px 4px 0 #000000;
+  }
+
+  .brutal-btn {
+    padding: 10px 14px;
+    font-size: 0.8rem;
+    min-height: 44px;
+  }
+
+  .brutal-sure-btn {
+    padding: 12px 18px;
+    font-size: 0.85rem;
+    min-height: 46px;
+  }
+
+  .brutal-title {
+    font-size: 1.15rem;
+  }
+
+  .brutal-input {
+    padding: 12px;
+    font-size: 0.95rem;
+  }
+
+  /* Responsive Grid Adjustments */
+  .grid-responsive-2col {
+    grid-template-columns: 1fr !important;
+  }
+
+  .grid-responsive-3col {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .brutal-card {
+    padding: 14px !important;
+  }
+
+  .brutal-title {
+    font-size: 1rem;
+  }
+
+  .grid-responsive-3col {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* SVG Graph Touch Scrolling */
+  .svg-container-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
