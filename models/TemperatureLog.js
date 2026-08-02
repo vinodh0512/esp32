@@ -7,8 +7,28 @@ const temperatureLogSchema = new mongoose.Schema({
         index: true
     },
     temperature: {
-        type: Number,
-        required: true
+        type: Number
+    },
+    pH: {
+        type: Number
+    },
+    voltage: {
+        type: Number
+    },
+    raw: {
+        type: Number
+    },
+    phConnected: {
+        type: Boolean,
+        default: false
+    },
+    tempConnected: {
+        type: Boolean,
+        default: false
+    },
+    led: {
+        type: Boolean,
+        default: false
     },
     timestamp: {
         type: Date,

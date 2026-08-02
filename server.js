@@ -43,9 +43,10 @@ function broadcastToDashboards(messageObj) {
   }
 }
 
-// Helper to conditionally save temperature & pH log to MongoDB
-async function saveTemperatureLogIfNeeded(devId, temperature, pH) {
-  if (temperature === undefined && pH === undefined) return;
+// Helper to conditionally save telemetry (temperature, pH, voltage, raw) log to MongoDB
+async function saveTemperatureLogIfNeeded(devId, metrics = {}) {
+  const { temperature, pH, voltage, raw, phConnected, tempConnected, led } = metrics;
+  if (temperature === undefined && pH === undefined && voltage === undefined) return;
   
   try {
     const lastLog = await TemperatureLog.findOne({ deviceId: devId }).sort({ timestamp: -1 });
@@ -54,10 +55,11 @@ async function saveTemperatureLogIfNeeded(devId, temperature, pH) {
     if (!lastLog) {
       shouldSave = true;
     } else {
-      const tempDiff = temperature !== undefined ? Math.abs(temperature - lastLog.temperature) : 0;
+      const tempDiff = temperature !== undefined ? Math.abs(temperature - (lastLog.temperature || 0)) : 0;
+      const phDiff = pH !== undefined ? Math.abs(pH - (lastLog.pH || 0)) : 0;
       const timeDiff = Date.now() - new Date(lastLog.timestamp).getTime();
       
-      if (tempDiff >= 0.2 || timeDiff >= 10000) {
+      if (tempDiff >= 0.1 || phDiff >= 0.05 || timeDiff >= 10000) {
         shouldSave = true;
       }
     }
@@ -66,7 +68,12 @@ async function saveTemperatureLogIfNeeded(devId, temperature, pH) {
       await TemperatureLog.create({
         deviceId: devId,
         temperature,
-        pH
+        pH,
+        voltage,
+        raw,
+        phConnected,
+        tempConnected,
+        led
       });
     }
 
@@ -203,7 +210,7 @@ wss.on("connection", (ws, req) => {
             { returnDocument: "after", upsert: true }
           );
 
-          await saveTemperatureLogIfNeeded(devId, temperature, pH);
+          await saveTemperatureLogIfNeeded(devId, { temperature, pH, voltage, raw, phConnected, tempConnected, led });
           broadcastToDashboards({ type: "deviceUpdate", data: dev });
         }
       } catch (err) {
@@ -413,6 +420,140 @@ app.post("/api/batches/stop", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// --- SENSOR READINGS & TELEMETRY API ENDPOINTS ---
+
+// 1. GET Device Status (MongoDB Device model query)
+const getDeviceStatus = async (req, res) => {
+  try {
+    const devId = req.query.deviceId || "esp32-1";
+    const dev = await Device.findOne({ deviceId: devId });
+    if (!dev) {
+      return res.status(404).json({
+        deviceId: devId,
+        status: "offline",
+        temperature: null,
+        pH: null,
+        voltage: null,
+        raw: null,
+        phConnected: false,
+        tempConnected: false,
+        led: false,
+        tempEnabled: true,
+        lastSeen: null
+      });
+    }
+    res.json(dev);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+app.get("/status", getDeviceStatus);
+app.get("/api/status", getDeviceStatus);
+app.get("/api/readings/latest", getDeviceStatus);
+
+// 2. GET Historical Telemetry Logs from MongoDB (pH & Temperature)
+const getTelemetryHistory = async (req, res) => {
+  try {
+    const devId = req.query.deviceId || "esp32-1";
+    const hours = parseFloat(req.query.hours);
+    const limit = parseInt(req.query.limit) || 100;
+
+    let filter = { deviceId: devId };
+    if (!isNaN(hours) && hours > 0) {
+      const startTime = new Date(Date.now() - hours * 60 * 60 * 1000);
+      filter.timestamp = { $gte: startTime };
+    }
+
+    const logs = await TemperatureLog.find(filter)
+      .sort({ timestamp: -1 })
+      .limit(limit);
+
+    // Return in chronological order for frontend charts
+    res.json(logs.reverse());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+app.get("/temp/history", getTelemetryHistory);
+app.get("/api/temp/history", getTelemetryHistory);
+app.get("/api/readings", getTelemetryHistory);
+
+// 3. POST HTTP Telemetry from ESP32 (saves to MongoDB)
+const postTelemetry = async (req, res) => {
+  try {
+    const payload = req.body.data || req.body;
+    const devId = req.body.deviceId || payload.deviceId || "esp32-1";
+    const { temperature, pH, voltage, raw, phConnected, tempConnected, led } = payload;
+
+    const updateData = {
+      status: "online",
+      lastSeen: new Date()
+    };
+    if (temperature !== undefined) updateData.temperature = temperature;
+    if (pH !== undefined) updateData.pH = pH;
+    if (voltage !== undefined) updateData.voltage = voltage;
+    if (raw !== undefined) updateData.raw = raw;
+    if (phConnected !== undefined) updateData.phConnected = phConnected;
+    if (tempConnected !== undefined) updateData.tempConnected = tempConnected;
+    if (led !== undefined) updateData.led = led;
+
+    const dev = await Device.findOneAndUpdate(
+      { deviceId: devId },
+      updateData,
+      { returnDocument: "after", upsert: true }
+    );
+
+    await saveTemperatureLogIfNeeded(devId, { temperature, pH, voltage, raw, phConnected, tempConnected, led });
+    broadcastToDashboards({ type: "deviceUpdate", data: dev });
+
+    res.json({ success: true, device: dev });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+app.post("/api/telemetry", postTelemetry);
+app.post("/api/readings", postTelemetry);
+
+// 4. HTTP Device Control (LED & Sensor Polling)
+const handleControlCommand = async (req, res, forceLedState, forceTempState) => {
+  try {
+    const devId = req.body.deviceId || req.query.deviceId || "esp32-1";
+    const updateObj = { lastSeen: new Date(), status: "online" };
+    
+    if (forceLedState !== undefined) updateObj.led = forceLedState;
+    else if (req.body.led !== undefined) updateObj.led = req.body.led;
+
+    if (forceTempState !== undefined) updateObj.tempEnabled = forceTempState;
+    else if (req.body.tempEnabled !== undefined) updateObj.tempEnabled = req.body.tempEnabled;
+
+    const dev = await Device.findOneAndUpdate(
+      { deviceId: devId },
+      updateObj,
+      { returnDocument: "after", upsert: true }
+    );
+
+    broadcastToDashboards({ type: "deviceUpdate", data: dev });
+
+    const deviceWs = deviceClients.get(devId);
+    if (deviceWs && deviceWs.readyState === 1) {
+      const forwardPayload = { type: "control" };
+      if (dev.led !== undefined) forwardPayload.led = dev.led;
+      if (dev.tempEnabled !== undefined) forwardPayload.tempEnabled = dev.tempEnabled;
+      deviceWs.send(JSON.stringify(forwardPayload));
+    }
+
+    res.json({ success: true, device: dev });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+app.post("/led/on", (req, res) => handleControlCommand(req, res, true, undefined));
+app.post("/led/off", (req, res) => handleControlCommand(req, res, false, undefined));
+app.post("/temp/on", (req, res) => handleControlCommand(req, res, undefined, true));
+app.post("/temp/off", (req, res) => handleControlCommand(req, res, undefined, false));
+app.post("/api/control", (req, res) => handleControlCommand(req, res, undefined, undefined));
 
 // Start Server
 server.listen(PORT, () => {
