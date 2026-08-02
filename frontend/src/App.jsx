@@ -1,696 +1,257 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { motion } from "framer-motion";
-import axios from "axios";
+import React, { useState, useEffect } from 'react';
+import { Navbar } from './components/Navbar';
+import { ConnectionModal } from './components/ConnectionModal';
+import { SensorCard } from './components/SensorCard';
+import { ControlsCard } from './components/ControlsCard';
+import { LiveTelemetryChart } from './components/LiveTelemetryChart';
+import { ActivityLogs } from './components/ActivityLogs';
+import { AlertBanner } from './components/AlertBanner';
+import { TelemetryGraphPage } from './components/TelemetryGraphPage';
+import { FermentationCard } from './components/FermentationCard';
+import { FermentationHistoryPage } from './components/FermentationHistoryPage';
+import { espService } from './services/espConnection';
 
-// Import custom components
-import { Navbar } from "./components/Navbar";
-import { DeviceCard } from "./components/DeviceCard";
-import { LedCard } from "./components/LedCard";
-import { TemperatureCard } from "./components/TemperatureCard";
-import { TemperatureStats } from "./components/TemperatureStats";
-import { DetailedChart } from "./components/DetailedChart";
-import { HistoricalTable } from "./components/HistoricalTable";
-import { StatsCard } from "./components/StatsCard";
-import { ActivityLogs } from "./components/ActivityLogs";
-import { SettingsModal } from "./components/SettingsModal";
-import { Toast } from "./components/Toast";
-import { CameraCard } from "./components/CameraCard";
-import { PhCard } from "./components/PhCard";
-
-
-function App() {
-  // --- States with Caching ---
-  const [backendUrl, setBackendUrl] = useState(() => {
-    const saved = localStorage.getItem("backendUrl");
-    const isProduction = window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
-    if (saved) {
-      if (isProduction && (saved.includes("localhost") || saved.includes("127.0.0.1"))) {
-        localStorage.removeItem("backendUrl");
-      } else {
-        return saved;
-      }
-    }
-    return "https://esp32-1-5ssj.onrender.com";
-  });
-
-  const [deviceData, setDeviceData] = useState(() => {
-    const cached = localStorage.getItem("cached_deviceData");
-    return cached ? JSON.parse(cached) : null;
-  });
-
-  const [logs, setLogs] = useState(() => {
-    const cached = localStorage.getItem("cached_logs");
-    return cached ? JSON.parse(cached).map(log => ({ ...log, timestamp: new Date(log.timestamp) })) : [];
-  });
-
-  const [totalHeartbeats, setTotalHeartbeats] = useState(() => {
-    return Number(localStorage.getItem("cached_totalHeartbeats")) || 0;
-  });
-
-  const [commandsSent, setCommandsSent] = useState(() => {
-    return Number(localStorage.getItem("cached_commandsSent")) || 0;
-  });
-
-  const [isBackendOnline, setIsBackendOnline] = useState(false);
-  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
-  const [lastSeenSecondsAgo, setLastSeenSecondsAgo] = useState(null);
-  
-  const [ledState, setLedState] = useState(false);
-  const [isLedLoading, setIsLedLoading] = useState(false);
-  const [tempEnabled, setTempEnabled] = useState(false);
-  const [temperature, setTemperature] = useState(null);
-  const [pH, setPh] = useState(null);
-  const [voltage, setVoltage] = useState(null);
-  const [raw, setRaw] = useState(null);
-  const [phConnected, setPhConnected] = useState(true);
-  const [tempHistory, setTempHistory] = useState(() => {
-    const cached = localStorage.getItem("cached_tempHistory");
-    return cached ? JSON.parse(cached) : [];
-  });
-  const [isTempLoading, setIsTempLoading] = useState(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [isApiLoading, setIsApiLoading] = useState(false);
-
-  // Operational stats
-  const [activeSessionSeconds, setActiveSessionSeconds] = useState(0);
-  const [latency, setLatency] = useState(0);
-
-  // WebSocket Connection States
-  const [wsStatus, setWsStatus] = useState("disconnected"); // "connected", "connecting", "disconnected"
-  const wsRef = useRef(null);
-  const chartCacheRef = useRef({}); // Caches: { "1h": { data, timestamp }, ... }
-
-  // Tab State
-  const [activeTab, setActiveTab] = useState("operations"); // "operations", "analytics"
-  const [chartRange, setChartRange] = useState("live"); // "live", "1h", "3h", "6h", "12h"
-  const [historicalData, setHistoricalData] = useState([]);
-  const [isChartLoading, setIsChartLoading] = useState(false);
-
-  // Modal / Toasts
-  const [toasts, setToasts] = useState([]);
+export default function App() {
+  const [state, setState] = useState(espService.state);
+  const [status, setStatus] = useState(espService.status);
+  const [activePage, setActivePage] = useState('dashboard'); // 'dashboard' | 'fermentation' | 'graph'
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [logs, setLogs] = useState([]);
 
-  // Track previous online status
-  const prevDeviceOnlineRef = useRef(false);
-
-  // --- Caching Sync Effects ---
-  useEffect(() => {
-    if (deviceData) {
-      localStorage.setItem("cached_deviceData", JSON.stringify(deviceData));
+  // Fermentation Active Batch State
+  const [activeBatch, setActiveBatch] = useState(() => {
+    try {
+      const saved = localStorage.getItem('esp_active_batch');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
     }
-  }, [deviceData]);
+  });
+
+  // Filter numeric telemetry values
+  const tempValues = history.map(h => h.temperature).filter(v => v !== undefined && v !== null && !isNaN(v));
+  const minTemp = tempValues.length > 0 ? Math.min(...tempValues).toFixed(1) : undefined;
+  const maxTemp = tempValues.length > 0 ? Math.max(...tempValues).toFixed(1) : undefined;
+
+  const phValues = history.map(h => h.pH).filter(v => v !== undefined && v !== null && !isNaN(v));
+  const minPh = phValues.length > 0 ? Math.min(...phValues).toFixed(2) : undefined;
+  const maxPh = phValues.length > 0 ? Math.max(...phValues).toFixed(2) : undefined;
 
   useEffect(() => {
-    localStorage.setItem("cached_logs", JSON.stringify(logs));
-  }, [logs]);
+    // Connect service on mount
+    espService.connect();
 
-  useEffect(() => {
-    localStorage.setItem("cached_totalHeartbeats", totalHeartbeats.toString());
-  }, [totalHeartbeats]);
-
-  useEffect(() => {
-    localStorage.setItem("cached_commandsSent", commandsSent.toString());
-  }, [commandsSent]);
-
-  useEffect(() => {
-    if (tempHistory && tempHistory.length > 0) {
-      localStorage.setItem("cached_tempHistory", JSON.stringify(tempHistory));
-    }
-  }, [tempHistory]);
-
-  // Fetch temperature history on load/backendUrl change
-  useEffect(() => {
-    const fetchTempHistory = async () => {
-      try {
-        const res = await axios.get(`${backendUrl}/temp/history?limit=20`);
-        setTempHistory(res.data || []);
-      } catch (err) {
-        console.error("Failed to fetch temperature history:", err);
+    const unsubscribe = espService.subscribe((newState, newStatus) => {
+      setState(newState);
+      setStatus(newStatus);
+      if (newState.activeBatch !== undefined) {
+        setActiveBatch(newState.activeBatch);
       }
-    };
-    fetchTempHistory();
-  }, [backendUrl]);
 
-  // --- Helper Functions (Memoized) ---
-  const addToast = useCallback((type, message) => {
-    const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-    setToasts((prev) => [...prev, { id, type, message }]);
-  }, []);
-
-  const removeToast = useCallback((id) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  }, []);
-
-  const addLog = useCallback((message, type = "info") => {
-    const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-    setLogs((prev) => {
-      const newLogs = [...prev, { id, timestamp: new Date(), message, type }];
-      return newLogs.slice(-25); // Limit logs to latest 25 items
+      // Append to history buffer without truncating active runs (retains 5,000 samples)
+      if (newState.temperature !== undefined || newState.pH !== undefined) {
+        setHistory(prev => {
+          const nextHist = [...prev, {
+            timestamp: new Date().toISOString(),
+            temperature: newState.temperature,
+            pH: newState.pH,
+            voltage: newState.voltage,
+            raw: newState.raw
+          }];
+          return nextHist.slice(-5000);
+        });
+      }
     });
-  }, []);
 
-  const handleClearLogs = useCallback(() => {
-    setLogs([]);
-  }, []);
-
-  const handleOpenSettings = useCallback(() => {
-    setIsSettingsOpen(true);
-  }, []);
-
-  const handleCloseSettings = useCallback(() => {
-    setIsSettingsOpen(false);
-  }, []);
-
-  // --- API Integrations ---
-
-  // 1. Fetch latest device status (HTTP Fallback)
-  const fetchStatus = useCallback(async (isPolled = true) => {
-    if (!isPolled) setIsApiLoading(true);
-    
-    const startTime = Date.now();
-    try {
-      const res = await axios.get(`${backendUrl}/status`, { timeout: 4000 });
-      const currentLatency = Date.now() - startTime;
-      
-      setLatency(currentLatency);
-      setIsBackendOnline(true);
-
-      const data = res.data;
-      
-      // Calculate last seen
-      if (data) {
-        const onlineStatus = data.status && data.status.toLowerCase() === "online";
-        const deviceActive = onlineStatus;
-        
-        if (data.lastSeen) {
-          const lastSeenTime = new Date(data.lastSeen);
-          const diffSecs = Math.floor((Date.now() - lastSeenTime) / 1000);
-          setLastSeenSecondsAgo(diffSecs >= 0 ? diffSecs : 0);
-        } else {
-          setLastSeenSecondsAgo(null);
-        }
-        
-        setIsDeviceOnline(deviceActive);
-        
-        // ONLY set real data directly fetched from server
-        setDeviceData(data);
-        setLedState(!!data.led);
-        setTempEnabled(!!data.tempEnabled);
-        setTemperature(data.temperature);
-        if (data.pH !== undefined) setPh(data.pH);
-        if (data.voltage !== undefined) setVoltage(data.voltage);
-        if (data.raw !== undefined) setRaw(data.raw);
-        if (data.phConnected !== undefined) setPhConnected(data.phConnected);
-
-        if (deviceActive) {
-          setTotalHeartbeats((prev) => prev + 1);
-          addLog("Heartbeat Received from ESP32 (HTTP)", "heartbeat");
-        }
-      } else {
-        setIsDeviceOnline(false);
-        setDeviceData(null);
-      }
-    } catch (err) {
-      console.error("API error:", err);
-      setIsBackendOnline(false);
-      setIsDeviceOnline(false);
-      setLatency(0);
-      
-      // Set logs for disconnected server
-      if (isBackendOnline) {
-        addToast("error", "Lost connection to backend server");
-        addLog("Backend server connection lost", "disconnect");
-      }
-    } finally {
-      if (!isPolled) setIsApiLoading(false);
-      setIsInitialLoading(false);
-    }
-  }, [backendUrl, isBackendOnline, addLog, addToast]);
-
-  // 2. Control LED (ON / OFF)
-  const handleToggleLed = useCallback(async (turnOn) => {
-    setIsLedLoading(true);
-    addLog(`Sending command: Turn LED ${turnOn ? "ON" : "OFF"}`, "info");
-    
-    // Check if WebSocket is connected
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({
-          type: "control",
-          deviceId: deviceData?.deviceId || "esp32-1",
-          led: turnOn
-        }));
-        // Optimistic UI updates
-        setLedState(turnOn);
-        setCommandsSent((prev) => prev + 1);
-        addToast("success", `Sent LED command: ${turnOn ? "ON" : "OFF"} (WS)`);
-        addLog(`LED turned ${turnOn ? "ON" : "OFF"} via WebSocket`, "command");
-      } catch (err) {
-        console.error("WS send error:", err);
-        addToast("error", "Failed to send command over WebSocket");
-      } finally {
-        setIsLedLoading(false);
-      }
-    } else {
-      // Fallback to HTTP POST
-      try {
-        const endpoint = turnOn ? "/led/on" : "/led/off";
-        const res = await axios.post(`${backendUrl}${endpoint}`, {}, { timeout: 4000 });
-        
-        if (res.data && res.data.success) {
-          setLedState(turnOn);
-          setCommandsSent((prev) => prev + 1);
-          addToast("success", `LED successfully turned ${turnOn ? "ON" : "OFF"} (HTTP)`);
-          addLog(`LED turned ${turnOn ? "ON" : "OFF"} via HTTP`, "command");
-        } else {
-          throw new Error("Command failed");
-        }
-      } catch (err) {
-        console.error(err);
-        addToast("error", `Failed to turn LED ${turnOn ? "ON" : "OFF"}`);
-        addLog(`Failed command: Turn LED ${turnOn ? "ON" : "OFF"}`, "disconnect");
-      } finally {
-        setIsLedLoading(false);
-      }
-    }
-  }, [backendUrl, deviceData, addLog, addToast]);
-
-  // 3. Control Temperature Sensor (ON / OFF)
-  const handleToggleTemp = useCallback(async (turnOn) => {
-    setIsTempLoading(true);
-    addLog(`Sending command: Turn Temperature Sensor ${turnOn ? "ON" : "OFF"}`, "info");
-    
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({
-          type: "control",
-          deviceId: deviceData?.deviceId || "esp32-1",
-          tempEnabled: turnOn
-        }));
-        setTempEnabled(turnOn);
-        setCommandsSent((prev) => prev + 1);
-        addToast("success", `Sent temp sensor command: ${turnOn ? "ON" : "OFF"} (WS)`);
-        addLog(`Temp sensor turned ${turnOn ? "ON" : "OFF"} via WebSocket`, "command");
-      } catch (err) {
-        console.error("WS send error:", err);
-        addToast("error", "Failed to send command over WebSocket");
-      } finally {
-        setIsTempLoading(false);
-      }
-    } else {
-      // Fallback to HTTP POST
-      try {
-        const endpoint = turnOn ? "/temp/on" : "/temp/off";
-        const res = await axios.post(`${backendUrl}${endpoint}`, {}, { timeout: 4000 });
-        
-        if (res.data && res.data.success) {
-          setTempEnabled(turnOn);
-          setCommandsSent((prev) => prev + 1);
-          addToast("success", `Temp sensor successfully turned ${turnOn ? "ON" : "OFF"} (HTTP)`);
-          addLog(`Temp sensor turned ${turnOn ? "ON" : "OFF"} via HTTP`, "command");
-        } else {
-          throw new Error("Command failed");
-        }
-      } catch (err) {
-        console.error(err);
-        addToast("error", `Failed to turn temp sensor ${turnOn ? "ON" : "OFF"}`);
-        addLog(`Failed command: Turn temp sensor ${turnOn ? "ON" : "OFF"}`, "disconnect");
-      } finally {
-        setIsTempLoading(false);
-      }
-    }
-  }, [backendUrl, deviceData, addLog, addToast]);
-
-  // 4. Handle time-range change for temperature chart
-  const handleRangeChange = useCallback(async (range) => {
-    setChartRange(range);
-    if (range === "live") {
-      return; // Fallback to websocket history
-    }
-
-    const cached = chartCacheRef.current[range];
-    const cacheExpiry = 15000; // 15 seconds cache lifetime
-
-    if (cached && (Date.now() - cached.timestamp < cacheExpiry)) {
-      setHistoricalData(cached.data);
-      return;
-    }
-
-    setIsChartLoading(true);
-    try {
-      let queryParam = "";
-      if (range === "1h") queryParam = "hours=1";
-      else if (range === "3h") queryParam = "hours=3";
-      else if (range === "6h") queryParam = "hours=6";
-      else if (range === "12h") queryParam = "hours=12";
-
-      const res = await axios.get(`${backendUrl}/temp/history?${queryParam}`);
-      const data = res.data || [];
-
-      // Cache data
-      chartCacheRef.current[range] = {
-        data: data,
-        timestamp: Date.now()
-      };
-
-      setHistoricalData(data);
-      addToast("info", `Loaded temperature logs for the last ${range}`);
-    } catch (err) {
-      console.error("Failed to load historical chart range:", err);
-      addToast("error", `Failed to load logs for timeframe ${range}`);
-    } finally {
-      setIsChartLoading(false);
-    }
-  }, [backendUrl, addToast]);
-
-  // --- WebSocket Connection Lifecycle ---
-  useEffect(() => {
-    let socket;
-    let reconnectTimeout;
-    let pingInterval;
-    
-    const connect = () => {
-      setWsStatus("connecting");
-      // Calculate ws/wss URL from HTTP backend URL
-      const wsUrl = backendUrl.replace(/^http/, "ws") + "/?clientType=dashboard";
-      
-      console.log(`Connecting WebSocket to: ${wsUrl}`);
-      socket = new WebSocket(wsUrl);
-      wsRef.current = socket;
-      
-      socket.onopen = () => {
-        setWsStatus("connected");
-        setIsBackendOnline(true);
-        setIsInitialLoading(false);
-        addToast("success", "Connected to WebSocket Gateway");
-        addLog("WebSocket link established", "info");
-        
-        // Measure real-time latency via ping-pong every 5s
-        pingInterval = setInterval(() => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-          }
-        }, 5000);
-      };
-      
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          
-          if (message.type === "deviceUpdate") {
-            const data = message.data;
-            setIsInitialLoading(false);
-            if (data) {
-              const onlineStatus = data.status && data.status.toLowerCase() === "online";
-              const deviceActive = onlineStatus;
-              
-              if (data.lastSeen) {
-                const lastSeenTime = new Date(data.lastSeen);
-                const diffSecs = Math.floor((Date.now() - lastSeenTime) / 1000);
-                setLastSeenSecondsAgo(diffSecs >= 0 ? diffSecs : 0);
-              } else {
-                setLastSeenSecondsAgo(null);
-              }
-              
-              setIsDeviceOnline(deviceActive);
-              setDeviceData(data);
-              setLedState(!!data.led);
-              setTempEnabled(!!data.tempEnabled);
-              setTemperature(data.temperature);
-              if (data.pH !== undefined) setPh(data.pH);
-              if (data.voltage !== undefined) setVoltage(data.voltage);
-              if (data.raw !== undefined) setRaw(data.raw);
-              if (data.phConnected !== undefined) setPhConnected(data.phConnected);
-              
-              if ((data.temperature !== undefined || data.pH !== undefined) && data.tempEnabled) {
-                const newReading = { 
-                  temperature: data.temperature, 
-                  pH: data.pH, 
-                  voltage: data.voltage, 
-                  raw: data.raw, 
-                  timestamp: new Date() 
-                };
-                
-                setTempHistory((prev) => {
-                  const updated = [...prev, newReading];
-                  return updated.slice(-20);
-                });
-
-                setHistoricalData((prev) => {
-                  if (prev && prev.length > 0) {
-                    const lastItem = prev[prev.length - 1];
-                    const lastTime = new Date(lastItem.timestamp || lastItem.createdAt).getTime();
-                    const currTime = newReading.timestamp.getTime();
-                    if (currTime - lastTime >= 10000) {
-                      return [...prev, newReading];
-                    }
-                  }
-                  return prev;
-                });
-              }
-              
-              if (deviceActive) {
-                setTotalHeartbeats((prev) => prev + 1);
-                addLog("Real-time state update synced", "heartbeat");
-              }
-            } else {
-              setIsDeviceOnline(false);
-              setDeviceData(null);
-            }
-          } else if (message.type === "pong") {
-            const elapsed = Date.now() - message.timestamp;
-            setLatency(elapsed);
-          }
-        } catch (err) {
-          console.error("Error parsing WS message:", err);
-        }
-      };
-      
-      socket.onclose = () => {
-        setWsStatus("disconnected");
-        clearInterval(pingInterval);
-        console.log("WebSocket disconnected. Reconnecting in 5s...");
-        reconnectTimeout = setTimeout(() => {
-          connect();
-        }, 5000);
-      };
-      
-      socket.onerror = (err) => {
-        console.error("WebSocket error:", err);
-        socket.close();
-      };
-    };
-    
-    connect();
-    
     return () => {
-      if (socket) {
-        socket.onclose = null; // Prevent reconnect on cleanup
-        socket.close();
-      }
-      clearInterval(pingInterval);
-      clearTimeout(reconnectTimeout);
+      unsubscribe();
+      espService.disconnect();
     };
-  }, [backendUrl, addLog, addToast]);
+  }, []);
 
-  // --- Fallback Polling (only active when WS is disconnected) ---
+  const logEvent = (type, message) => {
+    setLogs(prev => [
+      { timestamp: new Date().toISOString(), type, message },
+      ...prev.slice(0, 199)
+    ]);
+  };
+
   useEffect(() => {
-    if (wsStatus === "connected") return;
+    logEvent('info', `Switched connection mode to ${state.connectionMode.toUpperCase()}`);
+  }, [state.connectionMode]);
 
-    setIsInitialLoading(true);
-    fetchStatus(false);
-
-    const pollTimer = setInterval(() => {
-      fetchStatus(true);
-    }, 3000);
-
-    return () => clearInterval(pollTimer);
-  }, [fetchStatus, wsStatus]);
-
-  // Session time counter and dynamic device uptime counter
-  const [uptimeSeconds, setUptimeSeconds] = useState(0);
   useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveSessionSeconds((prev) => prev + 1);
-      if (isDeviceOnline) {
-        setUptimeSeconds((prev) => prev + 1);
-      } else {
-        setUptimeSeconds(0);
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isDeviceOnline]);
-
-  // Monitor device status transitions (connect/disconnect logs)
-  useEffect(() => {
-    if (isDeviceOnline !== prevDeviceOnlineRef.current) {
-      if (isDeviceOnline) {
-        addToast("success", "ESP32 Controller is Online!");
-        addLog("ESP32 Device Connected to system", "connect");
-      } else {
-        addToast("warning", "ESP32 Device is Offline.");
-        addLog("ESP32 Device Disconnected", "disconnect");
-      }
-      prevDeviceOnlineRef.current = isDeviceOnline;
+    if (status === 'connected') {
+      logEvent('info', `Successfully established socket session in ${state.connectionMode.toUpperCase()} mode`);
+    } else if (status === 'error') {
+      logEvent('error', `Connection error occurred on target IP/host`);
     }
-  }, [isDeviceOnline, addLog, addToast]);
+  }, [status]);
 
-  const handleSaveSettings = useCallback((newUrl) => {
-    setBackendUrl(newUrl);
-    localStorage.setItem("backendUrl", newUrl);
-    addToast("info", `API Backend URL updated to: ${newUrl}`);
-    setIsInitialLoading(true);
-  }, [addToast]);
+  const handleControl = (controlPayload) => {
+    espService.sendControl(controlPayload);
+    if (controlPayload.led !== undefined) {
+      logEvent('info', `Command issued: Set LED -> ${controlPayload.led ? 'ON' : 'OFF'}`);
+    }
+    if (controlPayload.tempEnabled !== undefined) {
+      logEvent('info', `Command issued: Set Polling Stream -> ${controlPayload.tempEnabled ? 'RESUME' : 'PAUSE'}`);
+    }
+  };
 
-  // --- Render Skeleton Loader for Vanilla CSS ---
-  const renderSkeletons = () => (
-    <div className="dashboard-grid-main">
-      {[1, 2, 3, 4].map((i) => (
-        <div key={i} className="card" style={{ height: "320px", background: "#FFFFFF", animation: "pulse 1.5s infinite" }}>
-          <div style={{ width: "35%", height: "12px", background: "#F1F5F9", borderRadius: "6px" }} />
-          <div style={{ width: "60%", height: "20px", background: "#F1F5F9", borderRadius: "6px", marginTop: "8px" }} />
-          <div style={{ display: "flex", justifyContent: "center", margin: "40px 0" }}>
-            <div style={{ width: "80px", height: "80px", borderRadius: "50%", background: "#F8FAFC" }} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-            <div style={{ height: "36px", background: "#F8FAFC", borderRadius: "10px" }} />
-            <div style={{ height: "36px", background: "#F8FAFC", borderRadius: "10px" }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  const handleSaveConfig = (newMode, newConfig) => {
+    espService.updateConfig(newMode, newConfig);
+    logEvent('info', `Updated connection parameters. Target IP: ${newConfig.directIp || newConfig.relayUrl}`);
+  };
+
+  // --- FERMENTATION BATCH HANDLERS ---
+  const handleStartBatch = (name) => {
+    const fullBatch = {
+      name: name || 'Yeast Sugar Test',
+      startTime: new Date().toISOString(),
+      initialPH: state.pH !== undefined ? state.pH : 6.82,
+      initialTemp: state.temperature !== undefined ? state.temperature : 28.4,
+      status: 'RUNNING'
+    };
+
+    // 1. Optimistic UI state update
+    setActiveBatch(fullBatch);
+    if (espService.state) espService.state.activeBatch = fullBatch;
+
+    // 2. Post to backend REST API & WebSocket
+    const baseUrl = espService.config.relayUrl.trim().replace(/\/$/, '');
+    fetch(`${baseUrl}/api/batches/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...fullBatch, deviceId: espService.config.deviceId })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.batch) {
+          setActiveBatch(data.batch);
+          if (espService.state) espService.state.activeBatch = data.batch;
+        }
+      })
+      .catch(err => console.error("Error starting batch via REST:", err));
+
+    espService.sendControl({ fermentation: 'start', batch: fullBatch });
+    logEvent('warn', `🚀 FERMENTATION STARTED: "${fullBatch.name}" | Initial pH: ${fullBatch.initialPH} | Initial Temp: ${fullBatch.initialTemp}°C`);
+  };
+
+  const handleStopBatch = () => {
+    if (!activeBatch) return;
+    
+    const stoppingBatchName = activeBatch.name;
+
+    // 1. Optimistic UI state update
+    setActiveBatch(null);
+    if (espService.state) espService.state.activeBatch = null;
+
+    // 2. Post to backend REST API & WebSocket
+    const baseUrl = espService.config.relayUrl.trim().replace(/\/$/, '');
+    fetch(`${baseUrl}/api/batches/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: espService.config.deviceId, finalPH: state.pH })
+    }).catch(err => console.error("Error stopping batch via REST:", err));
+
+    espService.sendControl({ fermentation: 'stop', finalPH: state.pH });
+    logEvent('warn', `🛑 FERMENTATION COMPLETED: "${stoppingBatchName}"`);
+  };
 
   return (
-    <div className="dashboard-wrapper">
-      {/* Toast System */}
-      <Toast toasts={toasts} removeToast={removeToast} />
-
-      {/* Smooth circular loader overlay */}
-      {(isInitialLoading || isLedLoading) && (
-        <div className="loader-overlay">
-          <div className="spinner"></div>
-          <span className="loader-text">
-            {isInitialLoading ? "Connecting to IoT Node..." : "Syncing LED State..."}
-          </span>
-        </div>
-      )}
-
-      {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={handleCloseSettings}
-        backendUrl={backendUrl}
-        onSave={handleSaveSettings}
-        addToast={addToast}
-      />
-
-      {/* Top Header Navbar */}
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      
+      {/* Top Navbar with Navigation Tabs */}
       <Navbar 
-        isBackendOnline={isBackendOnline} 
-        wsStatus={wsStatus} 
-        onOpenSettings={handleOpenSettings} 
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        state={state} 
+        status={status} 
+        activePage={activePage}
+        setActivePage={setActivePage}
+        onOpenSettings={() => setIsSettingsOpen(true)} 
       />
 
-      {isInitialLoading && !deviceData ? (
-        renderSkeletons()
-      ) : activeTab === "operations" ? (
-        <div className="dashboard-grid-main">
-          {/* Card 1: Device Telemetry Status */}
-          <DeviceCard
-            deviceData={deviceData}
-            isOnline={isDeviceOnline}
-            lastSeenSecondsAgo={lastSeenSecondsAgo}
-            latency={latency}
-            uptimeSeconds={uptimeSeconds}
-            isLoading={isApiLoading}
-          />
+      {/* Connection Config Drawer / Modal */}
+      <ConnectionModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        currentMode={state.connectionMode}
+        currentConfig={espService.config}
+        onSave={handleSaveConfig}
+      />
 
-          {/* Card 2: LED Control Toggle */}
-          <LedCard
-            ledState={ledState}
-            isOnline={isDeviceOnline}
-            onToggle={handleToggleLed}
-            isLoading={isLedLoading}
-          />
+      {/* Main Container */}
+      <main style={{ maxWidth: '1400px', width: '100%', margin: '0 auto', padding: '0 16px 12px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: activePage === 'dashboard' ? 'hidden' : 'auto' }}>
+        
+        {/* Floating Alert Banner */}
+        <AlertBanner status={status} temperature={state.temperature} />
 
-          {/* Card 3: Water pH Sensor Card */}
-          <PhCard
-            pH={pH}
-            voltage={voltage}
-            raw={raw}
-            phConnected={phConnected}
-            isOnline={isDeviceOnline}
-            history={tempHistory}
-          />
-
-          {/* Card 4: Dashboard Analytics Stats */}
-          <StatsCard
-            totalHeartbeats={totalHeartbeats}
-            commandsSent={commandsSent}
-            activeSessionSeconds={activeSessionSeconds}
-            latency={latency}
-          />
-
-          {/* Card 4: Event Activity Logs */}
-          <div className="span-three-columns">
-            <ActivityLogs logs={logs} onClear={handleClearLogs} />
-          </div>
-        </div>
-      ) : activeTab === "camera" ? (
-        <div className="dashboard-grid-main">
-          <CameraCard addToast={addToast} isDeviceOnline={isDeviceOnline} />
-        </div>
-      ) : (
-        <div className="dashboard-grid-main">
-          {/* Card 1: Large Historical Timeline Chart */}
-          <div className="span-two-columns">
-            <DetailedChart 
-              history={chartRange === "live" ? tempHistory : historicalData} 
-              activeRange={chartRange}
-              onRangeChange={handleRangeChange}
-              isLoading={isChartLoading}
-              tempEnabled={tempEnabled}
-              isOnline={isDeviceOnline}
+        {/* View Switcher: Fermentation Page vs Graph Page vs Camera Page vs Single-Page Non-Scrollable Dashboard */}
+        {activePage === 'fermentation' ? (
+          <FermentationHistoryPage activeBatch={activeBatch} liveHistory={history} currentState={state} />
+        ) : activePage === 'graph' ? (
+          <TelemetryGraphPage historyData={history} state={state} />
+        ) : (
+          /* SINGLE-PAGE NON-SCROLLABLE DASHBOARD VIEWPORT GRID */
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '12px', minHeight: 0, overflow: 'hidden' }}>
+            
+            {/* Top Compact Fermentation Tracker Bar */}
+            <FermentationCard 
+              state={state} 
+              activeBatch={activeBatch}
+              onStartBatch={handleStartBatch}
+              onStopBatch={handleStopBatch}
             />
+
+            {/* Main 2-Column Dashboard Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              
+              {/* Left Column: Sensor Cards & Live Chart */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0, overflow: 'hidden' }}>
+                
+                {/* Sensors Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <SensorCard 
+                    title="Temperature Sensor" 
+                    value={state.temperature} 
+                    unit="°C" 
+                    iconType="temp" 
+                    minVal={minTemp}
+                    maxVal={maxTemp}
+                    warningThreshold={35.0}
+                  />
+
+                  <SensorCard 
+                    title="Water pH Level" 
+                    value={state.pH} 
+                    unit="pH" 
+                    iconType="ph" 
+                    minVal={minPh}
+                    maxVal={maxPh}
+                  />
+                </div>
+
+                {/* Live Telemetry Chart (Fills remaining height) */}
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <LiveTelemetryChart historyData={history} />
+                </div>
+
+              </div>
+
+              {/* Right Column: Hardware Controls & Activity Logs */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0, overflow: 'hidden' }}>
+                <ControlsCard state={state} onControl={handleControl} />
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <ActivityLogs logs={logs} onClear={() => setLogs([])} />
+                </div>
+              </div>
+
+            </div>
+
           </div>
+        )}
 
-          {/* Card 2: Temperature Sensor & Controls */}
-          <TemperatureCard
-            temperature={temperature}
-            tempEnabled={tempEnabled}
-            isOnline={isDeviceOnline}
-            onToggle={handleToggleTemp}
-            isLoading={isTempLoading}
-            history={tempHistory}
-          />
-
-          {/* Card 3: Water pH Sensor Card */}
-          <PhCard
-            pH={pH}
-            voltage={voltage}
-            raw={raw}
-            phConnected={phConnected}
-            isOnline={isDeviceOnline}
-            history={chartRange === "live" ? tempHistory : historicalData}
-          />
-
-          {/* Card 4: Historical table of saved database entries */}
-          <div className="span-two-columns">
-            <HistoricalTable history={chartRange === "live" ? tempHistory : historicalData} />
-          </div>
-
-          {/* Card 5: Temperature statistics grid */}
-          <TemperatureStats history={chartRange === "live" ? tempHistory : historicalData} />
-        </div>
-      )}
-
-
+      </main>
     </div>
   );
 }
-
-export default App;

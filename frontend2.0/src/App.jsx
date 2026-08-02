@@ -106,26 +106,48 @@ export default function App() {
 
   // --- FERMENTATION BATCH HANDLERS ---
   const handleStartBatch = (name) => {
-    const newBatch = {
+    const fullBatch = {
       name: name || 'Yeast Sugar Test',
+      startTime: new Date().toISOString(),
       initialPH: state.pH !== undefined ? state.pH : 6.82,
-      initialTemp: state.temperature !== undefined ? state.temperature : 28.4
+      initialTemp: state.temperature !== undefined ? state.temperature : 28.4,
+      status: 'RUNNING'
     };
 
+    // 1. Optimistic UI state update
+    setActiveBatch(fullBatch);
+    if (espService.state) espService.state.activeBatch = fullBatch;
+
+    // 2. Post to backend REST API & WebSocket
     const baseUrl = espService.config.relayUrl.trim().replace(/\/$/, '');
     fetch(`${baseUrl}/api/batches/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newBatch, deviceId: espService.config.deviceId })
-    }).catch(err => console.error("Error starting batch via REST:", err));
+      body: JSON.stringify({ ...fullBatch, deviceId: espService.config.deviceId })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.batch) {
+          setActiveBatch(data.batch);
+          if (espService.state) espService.state.activeBatch = data.batch;
+        }
+      })
+      .catch(err => console.error("Error starting batch via REST:", err));
 
-    espService.sendControl({ fermentation: 'start', batch: newBatch });
-    logEvent('warn', `🚀 FERMENTATION STARTED: "${newBatch.name}" | Initial pH: ${newBatch.initialPH} | Initial Temp: ${newBatch.initialTemp}°C`);
+    espService.sendControl({ fermentation: 'start', batch: fullBatch });
+    logEvent('warn', `🚀 FERMENTATION STARTED: "${fullBatch.name}" | Initial pH: ${fullBatch.initialPH} | Initial Temp: ${fullBatch.initialTemp}°C`);
   };
 
   const handleStopBatch = () => {
     if (!activeBatch) return;
     
+    const stoppingBatchName = activeBatch.name;
+
+    // 1. Optimistic UI state update
+    setActiveBatch(null);
+    if (espService.state) espService.state.activeBatch = null;
+
+    // 2. Post to backend REST API & WebSocket
     const baseUrl = espService.config.relayUrl.trim().replace(/\/$/, '');
     fetch(`${baseUrl}/api/batches/stop`, {
       method: 'POST',
@@ -134,7 +156,7 @@ export default function App() {
     }).catch(err => console.error("Error stopping batch via REST:", err));
 
     espService.sendControl({ fermentation: 'stop', finalPH: state.pH });
-    logEvent('warn', `🛑 FERMENTATION COMPLETED: "${activeBatch.name}"`);
+    logEvent('warn', `🛑 FERMENTATION COMPLETED: "${stoppingBatchName}"`);
   };
 
   return (
