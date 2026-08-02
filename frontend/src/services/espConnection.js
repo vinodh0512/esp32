@@ -20,20 +20,20 @@ export class ESPConnectionService {
     this.latency = 0;
     this.lastPingTime = 0;
 
-    // Default telemetry state
+    // Default telemetry state (No mock data fallback)
     this.state = {
       deviceId: this.config.deviceId,
       status: 'offline',
-      temperature: 28.4,
+      temperature: undefined,
       humidity: undefined,
-      pH: 6.82,
-      voltage: 1.73,
-      raw: 2150,
-      tempConnected: true,
-      phConnected: true,
-      led: true,
+      pH: undefined,
+      voltage: undefined,
+      raw: undefined,
+      tempConnected: false,
+      phConnected: false,
+      led: false,
       tempEnabled: true,
-      lastSeen: new Date().toISOString(),
+      lastSeen: null,
       latency: 0,
       connectionMode: this.mode
     };

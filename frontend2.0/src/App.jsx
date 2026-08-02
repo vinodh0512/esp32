@@ -184,9 +184,9 @@ export default function App() {
       <main style={{ maxWidth: '1400px', width: '100%', margin: '0 auto', padding: '0 16px 12px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: activePage === 'dashboard' ? 'hidden' : 'auto' }}>
         
         {/* Floating Alert Banner */}
-        <AlertBanner status={status} temperature={state.temperature} />
+        <AlertBanner status={status} deviceStatus={state.status} temperature={state.temperature} />
 
-        {/* View Switcher: Fermentation Page vs Graph Page vs Camera Page vs Single-Page Non-Scrollable Dashboard */}
+        {/* View Switcher: Fermentation Page vs Graph Page vs Single-Page Non-Scrollable Dashboard */}
         {activePage === 'fermentation' ? (
           <FermentationHistoryPage activeBatch={activeBatch} liveHistory={history} currentState={state} />
         ) : activePage === 'graph' ? (
@@ -219,6 +219,8 @@ export default function App() {
                     minVal={minTemp}
                     maxVal={maxTemp}
                     warningThreshold={35.0}
+                    isOnline={state.status === 'online'}
+                    isSensorConnected={state.tempConnected}
                   />
 
                   <SensorCard 
@@ -228,12 +230,18 @@ export default function App() {
                     iconType="ph" 
                     minVal={minPh}
                     maxVal={maxPh}
+                    isOnline={state.status === 'online'}
+                    isSensorConnected={state.phConnected}
                   />
                 </div>
 
                 {/* Live Telemetry Chart (Fills remaining height) */}
                 <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                  <LiveTelemetryChart historyData={history} />
+                  <LiveTelemetryChart 
+                    historyData={history} 
+                    isDeviceOnline={state.status === 'online'}
+                    isSensorConnected={state.tempConnected || state.phConnected}
+                  />
                 </div>
 
               </div>

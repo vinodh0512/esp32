@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { LineChart, BarChart2 } from 'lucide-react';
 
-export function LiveTelemetryChart({ historyData }) {
+export function LiveTelemetryChart({ historyData, isDeviceOnline = true, isSensorConnected = true }) {
   const [activeMetric, setActiveMetric] = useState('temperature');
   const [hoveredPoint, setHoveredPoint] = useState(null);
 
@@ -204,11 +204,29 @@ export function LiveTelemetryChart({ historyData }) {
           )}
         </svg>
 
-        {count < 2 && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#000000', fontWeight: 900, fontSize: '0.8rem', textTransform: 'uppercase' }}>
-            WAITING FOR TELEMETRY SAMPLES...
+        {!isDeviceOnline ? (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255, 255, 255, 0.94)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#ff4757', padding: '16px', textAlign: 'center', zIndex: 20 }}>
+            <span style={{ fontSize: '1rem', fontWeight: 900, textTransform: 'uppercase', marginBottom: '4px' }}>
+              ⚠️ ESP32 IS OFFLINE
+            </span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#000000' }}>
+              Please turn on your ESP32 device and connect to Wi-Fi to view live telemetry.
+            </span>
           </div>
-        )}
+        ) : !isSensorConnected ? (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255, 255, 255, 0.94)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#000000', padding: '16px', textAlign: 'center', zIndex: 20 }}>
+            <span style={{ fontSize: '1rem', fontWeight: 900, textTransform: 'uppercase', color: '#d97706', marginBottom: '4px' }}>
+              ⚠️ SENSOR NOT CONNECTED
+            </span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#000000' }}>
+              Please check your physical sensor wiring (GPIO 4 DS18B20 / GPIO 32 pH).
+            </span>
+          </div>
+        ) : count < 2 ? (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#000000', fontWeight: 900, fontSize: '0.8rem', textTransform: 'uppercase' }}>
+            AWAITING LIVE TELEMETRY SAMPLES...
+          </div>
+        ) : null}
       </div>
 
     </div>

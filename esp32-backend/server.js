@@ -120,9 +120,34 @@ wss.on("connection", (ws, req) => {
       FermentationBatch.findOne({ deviceId: devId, status: "RUNNING" })
     ])
       .then(([dev, activeBatch]) => {
+        const isDevOnline = dev && dev.status === "online";
         const payload = dev
-          ? { deviceId: dev.deviceId, status: dev.status, led: dev.led, tempEnabled: dev.tempEnabled, temperature: dev.temperature, pH: dev.pH, voltage: dev.voltage, raw: dev.raw, phConnected: dev.phConnected, tempConnected: dev.tempConnected, lastSeen: dev.lastSeen }
-          : { deviceId: devId, status: "offline", led: false, tempEnabled: true, lastSeen: null };
+          ? { 
+              deviceId: dev.deviceId, 
+              status: dev.status, 
+              led: dev.led, 
+              tempEnabled: dev.tempEnabled, 
+              temperature: isDevOnline ? dev.temperature : null, 
+              pH: isDevOnline ? dev.pH : null, 
+              voltage: isDevOnline ? dev.voltage : null, 
+              raw: isDevOnline ? dev.raw : null, 
+              phConnected: isDevOnline ? !!dev.phConnected : false, 
+              tempConnected: isDevOnline ? !!dev.tempConnected : false, 
+              lastSeen: dev.lastSeen 
+            }
+          : { 
+              deviceId: devId, 
+              status: "offline", 
+              led: false, 
+              tempEnabled: true, 
+              temperature: null, 
+              pH: null, 
+              voltage: null, 
+              raw: null, 
+              phConnected: false, 
+              tempConnected: false, 
+              lastSeen: null 
+            };
         
         ws.send(JSON.stringify({ type: "deviceUpdate", data: payload, activeBatch }));
       })

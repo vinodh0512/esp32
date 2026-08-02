@@ -1,7 +1,7 @@
 import React from 'react';
 import { Thermometer, Droplets, Activity, AlertTriangle, TrendingUp } from 'lucide-react';
 
-export function SensorCard({ title, value, unit, iconType, minVal, maxVal, warningThreshold, color }) {
+export function SensorCard({ title, value, unit, iconType, minVal, maxVal, warningThreshold, color, isOnline = true, isSensorConnected = true }) {
   const getIcon = () => {
     switch (iconType) {
       case 'temp': return <Thermometer size={18} strokeWidth={2.5} />;
@@ -76,10 +76,10 @@ export function SensorCard({ title, value, unit, iconType, minVal, maxVal, warni
         border: '2.5px solid #000000',
         boxShadow: '2.5px 2.5px 0 #000000'
       }}>
-        <span className="font-mono" style={{ fontSize: '2.2rem', fontWeight: 900, color: isWarning ? '#ff4757' : '#000000', letterSpacing: '-0.03em' }}>
-          {value !== undefined && value !== null ? value : '--'}
+        <span className="font-mono" style={{ fontSize: (!isOnline || !isSensorConnected) ? '1.4rem' : '2.2rem', fontWeight: 900, color: !isOnline ? '#64748b' : (!isSensorConnected ? '#d97706' : (isWarning ? '#ff4757' : '#000000')), letterSpacing: '-0.03em' }}>
+          {!isOnline ? 'OFFLINE' : (!isSensorConnected ? 'NOT DETECTED' : (value !== undefined && value !== null ? value : '--'))}
         </span>
-        <span style={{ fontSize: '1rem', fontWeight: 900, color: '#000000' }}>{unit}</span>
+        <span style={{ fontSize: '1rem', fontWeight: 900, color: '#000000' }}>{isOnline && isSensorConnected ? unit : ''}</span>
       </div>
 
       {/* Min / Max Footer */}
