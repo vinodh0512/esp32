@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Settings, LayoutDashboard, LineChart, FlaskConical, Camera } from 'lucide-react';
+import { Cpu, Settings, LayoutDashboard, LineChart, FlaskConical } from 'lucide-react';
 
 export function Navbar({ state, status, activePage, setActivePage, onOpenSettings }) {
   return (
@@ -123,27 +123,6 @@ export function Navbar({ state, status, activePage, setActivePage, onOpenSetting
           >
             <LineChart size={14} strokeWidth={3} />
             <span>TELEMETRY</span>
-          </button>
-
-          <button
-            onClick={() => setActivePage('camera')}
-            style={{
-              background: activePage === 'camera' ? '#5ad641' : '#ffffff',
-              border: '2px solid #000000',
-              color: '#000000',
-              padding: '5px 10px',
-              fontSize: '0.75rem',
-              fontWeight: 900,
-              cursor: 'pointer',
-              textTransform: 'uppercase',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <Camera size={14} strokeWidth={3} />
-            <span>CAMERA</span>
           </button>
         </div>
 

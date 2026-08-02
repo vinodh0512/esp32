@@ -9,7 +9,6 @@ import { AlertBanner } from './components/AlertBanner';
 import { TelemetryGraphPage } from './components/TelemetryGraphPage';
 import { FermentationCard } from './components/FermentationCard';
 import { FermentationHistoryPage } from './components/FermentationHistoryPage';
-import { CameraPage } from './components/CameraPage';
 import { espService } from './services/espConnection';
 
 export default function App() {
@@ -170,8 +169,6 @@ export default function App() {
           <FermentationHistoryPage activeBatch={activeBatch} liveHistory={history} currentState={state} />
         ) : activePage === 'graph' ? (
           <TelemetryGraphPage historyData={history} state={state} />
-        ) : activePage === 'camera' ? (
-          <CameraPage />
         ) : (
           /* SINGLE-PAGE NON-SCROLLABLE DASHBOARD VIEWPORT GRID */
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '12px', minHeight: 0, overflow: 'hidden' }}>
