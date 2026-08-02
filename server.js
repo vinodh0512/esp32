@@ -136,8 +136,38 @@ wss.on("connection", (ws, req) => {
         if (parsedMessage.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: parsedMessage.timestamp }));
         } else if (parsedMessage.type === "control") {
-          const { led, tempEnabled, calibrationOffset } = parsedMessage;
+          const { led, tempEnabled, calibrationOffset, fermentation } = parsedMessage;
           const targetDeviceId = parsedMessage.deviceId || devId;
+
+          // Handle Fermentation Batch Start/Stop over WebSockets
+          if (fermentation === "start") {
+            const { batch, name, initialPH, initialTemp } = parsedMessage;
+            await FermentationBatch.updateMany({ deviceId: targetDeviceId, status: "RUNNING" }, { status: "COMPLETED", endTime: new Date() });
+            
+            const newBatch = await FermentationBatch.create({
+              name: (batch && batch.name) || name || "Yeast Sugar Test",
+              deviceId: targetDeviceId,
+              startTime: new Date(),
+              initialPH: (batch && batch.initialPH !== undefined) ? batch.initialPH : (initialPH !== undefined ? initialPH : 6.82),
+              initialTemp: (batch && batch.initialTemp !== undefined) ? batch.initialTemp : (initialTemp !== undefined ? initialTemp : 28.4),
+              status: "RUNNING",
+              dataPoints: [{
+                time: new Date(),
+                pH: (batch && batch.initialPH !== undefined) ? batch.initialPH : (initialPH !== undefined ? initialPH : 6.82),
+                temperature: (batch && batch.initialTemp !== undefined) ? batch.initialTemp : (initialTemp !== undefined ? initialTemp : 28.4)
+              }]
+            });
+            broadcastToDashboards({ type: "fermentationStart", batch: newBatch, activeBatch: newBatch });
+          } else if (fermentation === "stop") {
+            const activeBatch = await FermentationBatch.findOne({ deviceId: targetDeviceId, status: "RUNNING" });
+            if (activeBatch) {
+              activeBatch.status = "COMPLETED";
+              activeBatch.endTime = new Date();
+              if (parsedMessage.finalPH !== undefined) activeBatch.finalPH = parsedMessage.finalPH;
+              await activeBatch.save();
+              broadcastToDashboards({ type: "fermentationStop", batch: activeBatch, activeBatch: null });
+            }
+          }
 
           const updateObj = { lastSeen: new Date(), status: "online" };
           if (led !== undefined) updateObj.led = led;
@@ -358,6 +388,17 @@ app.get("/", (req, res) => {
   res.json({ message: "ESP32 Backend Server with Camera Relay & WebSockets Active" });
 });
 
+// Get Currently Active Fermentation Batch from MongoDB
+app.get("/api/batches/active", async (req, res) => {
+  try {
+    const devId = req.query.deviceId || "esp32-1";
+    const batch = await FermentationBatch.findOne({ deviceId: devId, status: "RUNNING" });
+    res.json({ success: true, activeBatch: batch || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get Fermentation Batches History
 app.get("/api/batches", async (req, res) => {
   try {
@@ -391,7 +432,7 @@ app.post("/api/batches/start", async (req, res) => {
       }]
     });
 
-    broadcastToDashboards({ type: "fermentationStart", batch });
+    broadcastToDashboards({ type: "fermentationStart", batch, activeBatch: batch });
     res.json({ success: true, batch });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -414,7 +455,7 @@ app.post("/api/batches/stop", async (req, res) => {
     if (finalPH !== undefined) batch.finalPH = finalPH;
 
     await batch.save();
-    broadcastToDashboards({ type: "fermentationStop", batch });
+    broadcastToDashboards({ type: "fermentationStop", batch, activeBatch: null });
     res.json({ success: true, batch });
   } catch (err) {
     res.status(500).json({ error: err.message });
